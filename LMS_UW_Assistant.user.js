@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LMS UW Assistant
 // @namespace    https://github.com/PashaKrch/lms-underwriting-tools
-// @version      1.2
+// @version      1.3
 // @description  Combined LMS underwriting helper menu with optional UW modules.
 // @author       Pavlo Korochenko
 // @match        *://*/*
@@ -730,9 +730,24 @@ if (lmsUwAssistantModuleEnabled('followupHelper')) {
     return type;
   }
 
-  function updatePreview() {
+  function updatePreview(force = false) {
     const preview = qs('#uw-preview');
-    if (preview) preview.value = getFinalText();
+    if (!preview) return;
+
+    if (!force && preview.dataset.uwManualEdit === 'true') {
+      return;
+    }
+
+    preview.value = getFinalText();
+  }
+
+  function resetPreviewToGenerated() {
+    const preview = qs('#uw-preview');
+    if (preview) {
+      preview.dataset.uwManualEdit = 'false';
+    }
+
+    updatePreview(true);
   }
 
   function getPreviewTextForSave() {
@@ -750,7 +765,7 @@ if (lmsUwAssistantModuleEnabled('followupHelper')) {
     const cfg = getExtraConfig(type);
 
     if (!cfg) {
-      updatePreview();
+      resetPreviewToGenerated();
       return;
     }
 
@@ -762,10 +777,10 @@ if (lmsUwAssistantModuleEnabled('followupHelper')) {
     input.id = 'uw-extra';
     input.placeholder = cfg.placeholder;
     input.style.cssText = 'width:100%;box-sizing:border-box;';
-    input.addEventListener('input', updatePreview);
+    input.addEventListener('input', resetPreviewToGenerated);
 
     wrap.append(label, input);
-    updatePreview();
+    resetPreviewToGenerated();
   }
 
   function formOpen() {
@@ -953,6 +968,13 @@ if (lmsUwAssistantModuleEnabled('followupHelper')) {
     });
 
     typeSelect.addEventListener('change', renderExtra);
+
+    const previewBox = qs('#uw-preview');
+    if (previewBox) {
+      previewBox.addEventListener('input', () => {
+        previewBox.dataset.uwManualEdit = 'true';
+      });
+    }
 
     qs('#uw-detect').addEventListener('click', () => {
       const admin = qs(S.admin);
