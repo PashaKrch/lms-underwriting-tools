@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LMS UW Assistant
 // @namespace    https://github.com/PashaKrch/lms-underwriting-tools
-// @version      1.1
+// @version      1.2
 // @description  Combined LMS underwriting helper menu with optional UW modules.
 // @author       Pavlo Korochenko
 // @match        *://*/*
@@ -494,27 +494,32 @@ if (lmsUwAssistantModuleEnabled('followupHelper')) {
   'use strict';
 
   const FOLLOW_UP_TYPES = [
-    'Need comment from collection',
-    'Need Collection comment confirmation',
-    'Duplicates',
+    { separator: 'Cool Off' },
+    'Cool off till (mm/dd)',
+    'COOL OFF - no way to expedite',
+
+    { separator: 'Main UW Requests' },
+    'Need New Esig (due changed, etc)',
+    'Need Recent DD',
+    'Need Last 4 DDs',
+    'Need Recent Payment',
     'Need DL or redo Yodlee',
     'Need DL // empty IBV',
     'Need DL // short IBV',
-    'Need Recent DD',
-    'Need Last 4 DDs',
-    'Need SSN confirmation',
-    'Need PF Confirmation',
     'Need Bank ACC Confirmation',
+    'Need PF Confirmation',
+
+    { separator: 'Other / Confirmations' },
+    'Need comment from collection',
+    'Need Collection comment confirmation',
+    'Duplicates',
+    'Need SSN confirmation',
     'Need Correct Bank ACC Confirmation (Reversed R03-R04)',
     'Need ACC Holder Confirmation',
     'Need ACC with DDs // (xxxx1234) Confirmation',
     'Need POR',
     'Need Acceptable Bank ACC (bank name // checking // duplicate)',
-    'Need to Ask Why Recent DD lower',
-    'Need New Esig (due changed, etc)',
-    'Cool off till (mm/dd)',
-    'Need Recent Payment',
-    'COOL OFF - no way to expedite'
+    'Need to Ask Why Recent DD lower'
   ];
 
   const S = {
@@ -680,6 +685,7 @@ if (lmsUwAssistantModuleEnabled('followupHelper')) {
       'Need Recent DD': ['Recent DD date:', '07/30', true],
       'Need Acceptable Bank ACC (bank name // checking // duplicate)': ['Bank details:', 'Chime // checking // duplicate', true],
       'Cool off till (mm/dd)': ['Cool off till:', '07/25', true],
+      'COOL OFF - no way to expedite': ['Cool off date:', '07/30', true],
       'Need New Esig (due changed, etc)': ['Reason/details:', 'due changed', false]
     };
 
@@ -713,6 +719,10 @@ if (lmsUwAssistantModuleEnabled('followupHelper')) {
       return extra ? `Cool off till ${extra}` : type;
     }
 
+    if (type === 'COOL OFF - no way to expedite') {
+      return extra ? `COOL OFF - no way to expedite (${extra})` : type;
+    }
+
     if (type === 'Need New Esig (due changed, etc)') {
       return extra ? `Need New Esig (${extra})` : type;
     }
@@ -723,6 +733,12 @@ if (lmsUwAssistantModuleEnabled('followupHelper')) {
   function updatePreview() {
     const preview = qs('#uw-preview');
     if (preview) preview.value = getFinalText();
+  }
+
+  function getPreviewTextForSave() {
+    const preview = qs('#uw-preview');
+    const editedText = preview?.value.trim() || '';
+    return editedText || getFinalText();
   }
 
   function renderExtra() {
@@ -896,8 +912,8 @@ if (lmsUwAssistantModuleEnabled('followupHelper')) {
 
       <div id="uw-extra-wrap" style="margin-bottom:7px;"></div>
 
-      <span style="font-weight:bold;">Preview:</span>
-      <textarea id="uw-preview" rows="2" readonly style="width:100%;box-sizing:border-box;margin-top:3px;margin-bottom:7px;"></textarea>
+      <span style="font-weight:bold;">Preview / editable final text:</span>
+      <textarea id="uw-preview" rows="2" style="width:100%;box-sizing:border-box;margin-top:3px;margin-bottom:7px;resize:vertical;"></textarea>
 
       <label style="display:block;margin-bottom:8px;font-size:12px;">
         <input id="uw-save-note" type="checkbox" checked> Save to small Loan Notes
@@ -918,6 +934,19 @@ if (lmsUwAssistantModuleEnabled('followupHelper')) {
     const typeSelect = qs('#uw-type');
     FOLLOW_UP_TYPES.forEach(type => {
       const opt = document.createElement('option');
+
+      if (typeof type === 'object' && type.separator) {
+        opt.value = '';
+        opt.textContent = `── ${String(type.separator).toUpperCase()} ──`;
+        opt.disabled = true;
+        opt.style.color = '#111';
+        opt.style.background = '#e3e3e3';
+        opt.style.fontWeight = 'bold';
+        opt.style.fontSize = '11px';
+        typeSelect.appendChild(opt);
+        return;
+      }
+
       opt.value = type;
       opt.textContent = type;
       typeSelect.appendChild(opt);
@@ -951,7 +980,7 @@ if (lmsUwAssistantModuleEnabled('followupHelper')) {
         return alert('Please fill: ' + cfg.label);
       }
 
-      const text = getFinalText();
+      const text = getPreviewTextForSave();
 
       setValue(qs(S.standard), 'nothing');
       setValue(commentBox, text);
