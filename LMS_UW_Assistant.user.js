@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LMS UW Assistant
 // @namespace    https://github.com/PashaKrch/lms-underwriting-tools
-// @version      1.0
+// @version      1.1
 // @description  Combined LMS underwriting helper menu with optional UW modules.
 // @author       Pavlo Korochenko
 // @match        *://*/*
@@ -677,6 +677,7 @@ if (lmsUwAssistantModuleEnabled('followupHelper')) {
   function getExtraConfig(type) {
     const map = {
       'Need ACC with DDs // (xxxx1234) Confirmation': ['Account last 4:', '1234', true],
+      'Need Recent DD': ['Recent DD date:', '07/30', true],
       'Need Acceptable Bank ACC (bank name // checking // duplicate)': ['Bank details:', 'Chime // checking // duplicate', true],
       'Cool off till (mm/dd)': ['Cool off till:', '07/25', true],
       'Need New Esig (due changed, etc)': ['Reason/details:', 'due changed', false]
@@ -698,6 +699,10 @@ if (lmsUwAssistantModuleEnabled('followupHelper')) {
     if (type === 'Need ACC with DDs // (xxxx1234) Confirmation') {
       const last4 = extra.replace(/\D/g, '').slice(-4);
       return last4 ? `Need ACC with DDs // (${last4}) Confirmation` : type;
+    }
+
+    if (type === 'Need Recent DD') {
+      return extra ? `Need Recent DD (${extra})` : type;
     }
 
     if (type === 'Need Acceptable Bank ACC (bank name // checking // duplicate)') {
