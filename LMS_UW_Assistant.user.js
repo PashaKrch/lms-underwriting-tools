@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LMS UW Assistant
 // @namespace    https://github.com/PashaKrch/lms-underwriting-tools
-// @version      1.3
+// @version      1.4
 // @description  Combined LMS underwriting helper menu with optional UW modules.
 // @author       Pavlo Korochenko
 // @match        *://*/*
@@ -23,7 +23,8 @@
     defaultSettings: {
       followupHelper: true,
       dlFollowupScan: true,
-      notificationStatusChecker: true
+      notificationStatusChecker: true,
+      tbwNotesDropdown: true
     },
     modules: [
       {
@@ -40,9 +41,147 @@
         key: 'notificationStatusChecker',
         name: 'Notification Status Checker',
         note: 'Adds loan/app status to Notifications'
+      },
+      {
+        key: 'tbwNotesDropdown',
+        name: 'TBW Notes Dropdown',
+        note: 'Sales/UW TBW quick notes dropdown'
       }
     ]
   };
+
+  const RELEASE_NOTES = {
+    version: '1.4',
+    storageKey: 'lms-uw-assistant-release-notes-seen-v1',
+    title: '🛠️ LMS UW Assistant updated to v1.4',
+    lines: [
+      "What's new:",
+      '• Added TBW Notes Dropdown module',
+      '• Added Sales / UW mode switch in Notes window',
+      '• Sales mode uses Sales TBW reasons',
+      '• UW mode uses UW TBW reasons',
+      '• Module can be turned on/off from 🛠️ UW Tools'
+    ]
+  };
+
+  function isLikelyLmsPageForReleaseNotes() {
+    return (
+      /\/plm\.net(?:\/|$)/i.test(window.location.href) ||
+      Boolean(
+        document.getElementById('TopMenu') ||
+        document.getElementById('standardNote') ||
+        document.getElementById('maincontent_NewNoteText') ||
+        document.getElementById('table_alerts')
+      )
+    );
+  }
+
+  function getSeenReleaseVersion() {
+    try {
+      return localStorage.getItem(RELEASE_NOTES.storageKey) || '';
+    } catch (_) {
+      return '';
+    }
+  }
+
+  function setSeenReleaseVersion() {
+    try {
+      localStorage.setItem(RELEASE_NOTES.storageKey, RELEASE_NOTES.version);
+    } catch (_) {}
+  }
+
+  function showReleaseNotesIfNeeded() {
+    if (!isLikelyLmsPageForReleaseNotes()) return;
+    if (getSeenReleaseVersion() === RELEASE_NOTES.version) return;
+    if (document.getElementById('lms-uw-assistant-release-notes-overlay')) return;
+
+    setSeenReleaseVersion();
+
+    const overlay = document.createElement('div');
+    overlay.id = 'lms-uw-assistant-release-notes-overlay';
+    overlay.style.cssText = `
+      position:fixed;
+      inset:0;
+      width:100%;
+      height:100%;
+      background:rgba(0,0,0,0.45);
+      z-index:999999;
+      display:flex;
+      align-items:center;
+      justify-content:center;
+      font-family:Segoe UI,Tahoma,Arial,sans-serif;
+    `;
+
+    const modal = document.createElement('div');
+    modal.style.cssText = `
+      width:420px;
+      max-width:calc(100vw - 32px);
+      box-sizing:border-box;
+      background:#222;
+      color:#fff;
+      border-radius:10px;
+      box-shadow:0 8px 24px rgba(0,0,0,0.55);
+      padding:16px 20px;
+      font-size:13px;
+      line-height:1.45;
+    `;
+
+    const title = document.createElement('div');
+    title.textContent = RELEASE_NOTES.title;
+    title.style.cssText = `
+      font-weight:700;
+      font-size:14px;
+      margin-bottom:10px;
+      color:#fff;
+    `;
+
+    const body = document.createElement('div');
+    body.textContent = '\n' + RELEASE_NOTES.lines.join('\n');
+    body.style.cssText = `
+      white-space:pre-line;
+      margin-bottom:16px;
+      color:#f3f3f3;
+    `;
+
+    const actions = document.createElement('div');
+    actions.style.cssText = 'text-align:center;';
+
+    const ok = document.createElement('button');
+    ok.type = 'button';
+    ok.textContent = 'OK';
+    ok.style.cssText = `
+      min-width:78px;
+      padding:6px 18px;
+      border-radius:20px;
+      border:1px solid #00bcd4;
+      background:#111;
+      color:#fff;
+      cursor:pointer;
+      font-size:12px;
+      font-weight:700;
+    `;
+
+    ok.addEventListener('mouseenter', () => {
+      ok.style.background = '#00bcd4';
+    });
+
+    ok.addEventListener('mouseleave', () => {
+      ok.style.background = '#111';
+    });
+
+    ok.addEventListener('click', () => {
+      overlay.remove();
+    });
+
+    overlay.addEventListener('mousedown', event => {
+      if (event.target === overlay) overlay.remove();
+    });
+
+    actions.appendChild(ok);
+    modal.append(title, body, actions);
+    overlay.appendChild(modal);
+    document.body.appendChild(overlay);
+  }
 
   function safeJsonParse(text, fallback) {
     try {
@@ -446,6 +585,7 @@
     injectStyles();
     injectMenuItem();
     createDropdown();
+    showReleaseNotesIfNeeded();
   }
 
   if (document.readyState === 'loading') {
@@ -2544,5 +2684,586 @@ if (lmsUwAssistantModuleEnabled('notificationStatusChecker')) {
 
   } catch (error) {
     console.warn('[LMS UW Assistant] Notification Status Checker failed to start:', error);
+  }
+}
+
+
+/* ============================================================
+   MODULE: TBW Notes Dropdown
+   Source: TBW Notes Dropdown Sales/UW
+   ============================================================ */
+if (lmsUwAssistantModuleEnabled('tbwNotesDropdown')) {
+  try {
+
+(function () {
+    'use strict';
+
+    const TBW_OPTIONS_SALES = [
+        'TBW - Cust not interested',
+        'TBW - Amount too low',
+        'TBW - Loan too expensive',
+        'TBW - Cust did not apply',
+        'TBW - Cannot verify online banking',
+        'TBW - Cust has an active loan with us',
+        'TBW - Unacceptable bank',
+        'TBW - Cust Not Cooperating',
+        'TBW - No Direct Deposit',
+        'TBW - Unacceptable Pay Frequency',
+        'TBW - Bank account is not unique',
+        'TBW - No Checking account',
+        'TBW - New Bank Account',
+        'TBW - Unemployed',
+        'TBW - Minimum Income Requirement Not Met',
+        'TBW - Defaulted with us on the last payment',
+        'TBW - Cool off by collections',
+        'TBW - DO NOT LOAN',
+        'TBW - Not approved by collections',
+        'TBW - Cust in Military',
+        'TBW - Verified different SSN',
+        'TBW - Fraud',
+        'TBW - Other: '
+    ];
+
+    const TBW_OPTIONS_UW = [
+        'TBW - Cust has an active loan with us',
+        'TBW - Cannot verify online banking',
+        'TBW - Unacceptable bank',
+        'TBW - Multiple Open Loan',
+        'TBW - Multiple inactive loans',
+        'TBW - Recently received a loan',
+        'TBW - Multiple Defaults',
+        'TBW - Stop payment',
+        'TBW - Low EOD balances',
+        'TBW - Last EOD is low',
+        'TBW - No Direct deposits',
+        'TBW - No last DD',
+        'TBW - Last DD is low',
+        'TBW - Negative account balance',
+        'TBW - Bank account is not unique',
+        'TBW - Business account',
+        'TBW - Minimum Income Requirement Not Met',
+        'TBW - Unacceptable payment frequency',
+        'TBW - Inconsistent income',
+        'TBW - Irregular online banking behavior',
+        'TBW - Withdraws funds after DDs',
+        'TBW - Transfers funds to another account',
+        'TBW - Low banking activity',
+        'TBW - No checking account',
+        'TBW - New bank account',
+        'TBW - New job',
+        'TBW - Cust in collection',
+        'TBW - Defaulted with us on the last payment',
+        'TBW - Cool off by collections',
+        'TBW - Not approved by collections',
+        'TBW - DO NOT LOAN',
+        'TBW - Cust in Military',
+        'TBW - Unemployed',
+        'TBW - Fraud',
+        'TBW - Other: '
+    ];
+
+    const MODE_STORAGE_KEY = 'tbwNotesDropdown_mode';
+
+
+    const HOST_ID = 'tbw-quick-host-sales';
+    const INPUT_ID = 'tbwQuickSearchSales';
+    const LIST_ID = 'tbwQuickListSales';
+    const STYLE_ID = 'tbwQuickStylesSales';
+    const HIGHLIGHT_CLASS = 'tbw-active';
+
+    function norm(s) {
+        return (s || '').toLowerCase().replace(/\s+/g, ' ').trim();
+    }
+
+    function fillNotes(notesTextarea, value) {
+        if (!notesTextarea || !value) return;
+
+        notesTextarea.value = value;
+        notesTextarea.dispatchEvent(new Event('input', { bubbles: true }));
+        notesTextarea.dispatchEvent(new Event('change', { bubbles: true }));
+        notesTextarea.focus();
+
+        if (value === 'TBW - Other: ') {
+            try {
+                notesTextarea.setSelectionRange(value.length, value.length);
+            } catch (e) {}
+        }
+    }
+
+    function injectStyles() {
+        const existingStyle = document.getElementById(STYLE_ID);
+        if (existingStyle && existingStyle.dataset.lmsUwAssistantTbw === 'true') return;
+        if (existingStyle) existingStyle.remove();
+
+        const style = document.createElement('style');
+        style.id = STYLE_ID;
+        style.dataset.lmsUwAssistantTbw = 'true';
+        style.textContent = `
+          #${HOST_ID}{
+              position: relative;
+              display: inline-flex;
+              align-items: flex-start;
+              gap: 6px;
+              margin-left: 8px;
+              vertical-align: top;
+          }
+
+          #${HOST_ID} .tbw-input-wrap{
+              position: relative;
+              display: inline-block;
+          }
+
+          #${INPUT_ID}{
+              width: 27ex;
+              height: 24px;
+              padding: 2px 24px 2px 8px;
+              box-sizing: border-box;
+              border: 1px solid #b7b7b7;
+              background: #fff;
+              color: #111;
+              font-size: 11px;
+              font-family: Arial, sans-serif;
+              line-height: 20px;
+          }
+
+          #${INPUT_ID}::placeholder{
+              color: #222;
+              opacity: 1;
+          }
+
+          #${INPUT_ID}:focus{
+              outline: none;
+              border-color: #8f8f8f;
+          }
+
+          #${HOST_ID} .tbw-arrow{
+              position: absolute;
+              right: 9px;
+              top: 50%;
+              transform: translateY(-50%);
+              pointer-events: none;
+              color: #000;
+              font-size: 10px;
+              line-height: 1;
+          }
+
+          #${HOST_ID} .tbw-mode-toggle{
+              height: 24px;
+              min-width: 48px;
+              padding: 2px 9px;
+              box-sizing: border-box;
+              border: 1px solid #1d5fbf;
+              border-radius: 12px;
+              background: #2f80ed;
+              color: #fff;
+              font-size: 11px;
+              font-family: Arial, sans-serif;
+              line-height: 18px;
+              cursor: pointer;
+              font-weight: bold;
+          }
+
+          #${HOST_ID} .tbw-mode-toggle:hover{
+              filter: brightness(0.95);
+          }
+
+          #${HOST_ID}[data-mode="uw"] .tbw-mode-toggle{
+              background: #2e9d4f;
+              color: #fff;
+              border-color: #237d3e;
+          }
+
+          #${LIST_ID}{
+    position: absolute;
+    top: calc(100% + 10px);
+    left: 0;
+    width: max-content;
+    min-width: 320px;
+    max-width: none; /* 👈 важно */
+    max-height: 260px;
+    overflow-y: auto;
+    overflow-x: hidden;
+    background: #ffffff; /* 👈 белый */
+    color: #000000;
+    border: 1px solid #c8c8c8;
+    border-radius: 4px;
+    box-shadow: 0 4px 10px rgba(0,0,0,.15);
+    padding: 4px 0;
+    z-index: 99999;
+    display: none;
+    font-family: Arial, sans-serif;
+    white-space: nowrap;
+}
+
+          #${LIST_ID}.show{
+              display: block;
+          }
+
+         #${LIST_ID} .tbw-item{
+    padding: 6px 10px;
+    font-size: 11px;
+    cursor: pointer;
+    color: #000;
+}
+
+#${LIST_ID} .tbw-item:hover{
+    background: #e6f0ff;
+}
+
+#${LIST_ID} .tbw-item.${HIGHLIGHT_CLASS}{
+    background: #cce0ff;
+    color: #000;
+}
+
+#${LIST_ID} .tbw-separator{
+    padding: 4px 10px;
+    font-size: 10px;
+    font-weight: bold;
+    letter-spacing: .2px;
+    color: #111;
+    background: #e3e3e3;
+    cursor: default;
+}
+          #${LIST_ID} .tbw-empty{
+              padding: 8px 14px;
+              font-size: 11px;
+              color: #9fb2b8;
+          }
+
+          #${LIST_ID}::-webkit-scrollbar{
+              width: 8px;
+          }
+
+          #${LIST_ID}::-webkit-scrollbar-thumb{
+              background: rgba(255,255,255,0.18);
+              border-radius: 8px;
+          }
+        `;
+        document.head.appendChild(style);
+    }
+
+    function buildUI(standardSelect, notesTextarea) {
+        const existingHost = document.getElementById(HOST_ID);
+        if (existingHost) {
+            if (existingHost.dataset.lmsUwAssistantTbw === 'true') return;
+            existingHost.remove();
+        }
+
+        const legacyUwHost = document.getElementById('tbw-quick-host');
+        if (legacyUwHost) {
+            legacyUwHost.remove();
+        }
+
+        const host = document.createElement('div');
+        host.id = HOST_ID;
+        host.dataset.lmsUwAssistantTbw = 'true';
+
+        let currentMode = localStorage.getItem(MODE_STORAGE_KEY) === 'uw' ? 'uw' : 'sales';
+
+        const inputWrap = document.createElement('div');
+        inputWrap.className = 'tbw-input-wrap';
+
+        const input = document.createElement('input');
+        input.type = 'text';
+        input.id = INPUT_ID;
+        input.autocomplete = 'off';
+
+        input.addEventListener('focus', () => {
+            input.placeholder = '';
+        });
+
+        input.addEventListener('blur', () => {
+            if (!input.value.trim()) {
+                input.placeholder = getPlaceholder();
+            }
+        });
+
+        const arrow = document.createElement('span');
+        arrow.className = 'tbw-arrow';
+        arrow.textContent = '▼';
+
+        const modeToggle = document.createElement('button');
+        modeToggle.type = 'button';
+        modeToggle.className = 'tbw-mode-toggle';
+
+        const list = document.createElement('div');
+        list.id = LIST_ID;
+
+        inputWrap.appendChild(input);
+        inputWrap.appendChild(arrow);
+        inputWrap.appendChild(list);
+
+        host.appendChild(inputWrap);
+        host.appendChild(modeToggle);
+
+        standardSelect.parentNode.insertBefore(host, standardSelect.nextSibling);
+
+        let filtered = [];
+        let activeIndex = -1;
+
+        function isSeparator(item) {
+            return typeof item === 'object' && item && item.separator;
+        }
+
+        function isSelectable(item) {
+            return typeof item === 'string' && item.trim();
+        }
+
+        function getOptions() {
+            return currentMode === 'uw' ? TBW_OPTIONS_UW : TBW_OPTIONS_SALES;
+        }
+
+        function getPlaceholder() {
+            return currentMode === 'uw' ? '-- UW Notes --' : '-- Sales TBW Notes --';
+        }
+
+        function firstSelectableIndex(items) {
+            return items.findIndex(isSelectable);
+        }
+
+        function moveActive(direction) {
+            if (!filtered.length) return;
+
+            let next = activeIndex;
+
+            for (let i = 0; i < filtered.length; i++) {
+                next += direction;
+
+                if (next < 0) next = filtered.length - 1;
+                if (next >= filtered.length) next = 0;
+
+                if (isSelectable(filtered[next])) {
+                    activeIndex = next;
+                    updateHighlight();
+                    return;
+                }
+            }
+        }
+
+        function renderList(items) {
+            filtered = items;
+            activeIndex = firstSelectableIndex(items);
+
+            if (!items.length || activeIndex < 0) {
+                list.innerHTML = `<div class="tbw-empty">No matches</div>`;
+                return;
+            }
+
+            list.innerHTML = items.map((item, idx) => {
+                if (isSeparator(item)) {
+                    return `<div class="tbw-separator">── ${String(item.separator).toUpperCase()} ──</div>`;
+                }
+
+                return `
+                    <div class="tbw-item ${idx === activeIndex ? HIGHLIGHT_CLASS : ''}" data-index="${idx}">
+                        ${item}
+                    </div>
+                `;
+            }).join('');
+        }
+
+        function positionList() {
+            const rect = host.getBoundingClientRect();
+            const viewportHeight = window.innerHeight;
+            const availableBelow = viewportHeight - rect.bottom - 20;
+            list.style.maxHeight = Math.max(180, Math.min(availableBelow, 300)) + 'px';
+        }
+
+        function openList() {
+            positionList();
+            list.classList.add('show');
+        }
+
+        function closeList() {
+            list.classList.remove('show');
+            if (!input.value.trim() && document.activeElement !== input) {
+                input.placeholder = getPlaceholder();
+            }
+        }
+
+        function applyItem(value) {
+            fillNotes(notesTextarea, value);
+            input.value = '';
+            input.placeholder = getPlaceholder();
+            closeList();
+            input.blur();
+        }
+
+        function cleanLabel(text) {
+            return norm(text).replace(/^tbw\s*-\s*/, '');
+        }
+
+        function filterItems(term) {
+            const q = norm(term);
+            const options = getOptions();
+
+            if (!q) return [...options];
+
+            const scored = options
+                .filter(isSelectable)
+                .map(item => {
+                    const full = norm(item);
+                    const clean = cleanLabel(item);
+                    const words = clean.split(/\s+/);
+
+                    let score = 999;
+
+                    if (clean === q) score = 0;
+                    else if (clean.startsWith(q)) score = 1;
+                    else if (words.some(w => w.startsWith(q))) score = 2;
+                    else if (clean.includes(q)) score = 3;
+                    else if (full.includes(q)) score = 4;
+                    else return null;
+
+                    return { item, score, clean };
+                })
+                .filter(Boolean)
+                .sort((a, b) => {
+                    if (a.score !== b.score) return a.score - b.score;
+                    return a.clean.localeCompare(b.clean);
+                });
+
+            return scored.map(x => x.item);
+        }
+
+        function refreshList() {
+            renderList(filterItems(input.value));
+            positionList();
+        }
+
+        function updateHighlight() {
+            const nodes = Array.from(list.querySelectorAll('.tbw-item'));
+            nodes.forEach((node, idx) => {
+                node.classList.toggle(HIGHLIGHT_CLASS, idx === activeIndex);
+            });
+
+            const activeNode = nodes[activeIndex];
+            if (activeNode) {
+                activeNode.scrollIntoView({ block: 'nearest' });
+            }
+        }
+
+        input.addEventListener('focus', () => {
+            refreshList();
+            openList();
+        });
+
+        input.addEventListener('input', () => {
+            refreshList();
+            openList();
+        });
+
+        input.addEventListener('keydown', (e) => {
+            if (!list.classList.contains('show') && (e.key === 'ArrowDown' || e.key === 'Enter')) {
+                refreshList();
+                openList();
+            }
+
+            if (!filtered.length) return;
+
+            if (e.key === 'ArrowDown') {
+                e.preventDefault();
+                moveActive(1);
+            } else if (e.key === 'ArrowUp') {
+                e.preventDefault();
+                moveActive(-1);
+            } else if (e.key === 'Enter') {
+                e.preventDefault();
+                const chosen = filtered[Math.max(activeIndex, 0)];
+                if (isSelectable(chosen)) applyItem(chosen);
+            } else if (e.key === 'Escape') {
+                closeList();
+            }
+        });
+
+        list.addEventListener('mousemove', (e) => {
+            const item = e.target.closest('.tbw-item');
+            if (!item) return;
+
+            const idx = Number(item.dataset.index);
+            if (idx !== activeIndex) {
+                activeIndex = idx;
+                updateHighlight();
+            }
+        });
+
+        list.addEventListener('mousedown', (e) => {
+            const item = e.target.closest('.tbw-item');
+            if (!item) return;
+
+            e.preventDefault();
+            const idx = Number(item.dataset.index);
+            const chosen = filtered[idx];
+            if (isSelectable(chosen)) applyItem(chosen);
+        });
+
+        document.addEventListener('mousedown', (e) => {
+            if (!host.contains(e.target)) {
+                closeList();
+            }
+        });
+
+        arrow.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+
+            if (list.classList.contains('show')) {
+                closeList();
+            } else {
+                refreshList();
+                openList();
+                input.focus();
+            }
+        });
+
+        function updateModeUI() {
+            host.dataset.mode = currentMode;
+            modeToggle.textContent = currentMode === 'uw' ? 'UW' : 'Sales';
+            modeToggle.title = currentMode === 'uw' ? 'Switch to Sales notes' : 'Switch to UW notes';
+
+            if (!input.value.trim() && document.activeElement !== input) {
+                input.placeholder = getPlaceholder();
+            }
+        }
+
+        modeToggle.addEventListener('mousedown', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
+
+            currentMode = currentMode === 'uw' ? 'sales' : 'uw';
+            localStorage.setItem(MODE_STORAGE_KEY, currentMode);
+
+            input.value = '';
+            updateModeUI();
+            refreshList();
+            closeList();
+            modeToggle.focus();
+        });
+
+        updateModeUI();
+
+        window.addEventListener('resize', () => {
+            if (list.classList.contains('show')) positionList();
+        });
+    }
+
+    function initTBWQuickSearch() {
+        const standardSelect = document.getElementById('standardNote');
+        const notesTextarea = document.getElementById('maincontent_NewNoteText');
+
+        if (!standardSelect || !notesTextarea) return;
+
+        injectStyles();
+        buildUI(standardSelect, notesTextarea);
+    }
+
+    if (document.readyState === 'loading') {
+        document.addEventListener('DOMContentLoaded', initTBWQuickSearch);
+    } else {
+        initTBWQuickSearch();
+    }
+})();
+
+  } catch (error) {
+    console.warn('[LMS UW Assistant] TBW Notes Dropdown failed to start:', error);
   }
 }
