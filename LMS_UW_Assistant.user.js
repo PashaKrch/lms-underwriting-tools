@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LMS UW Assistant
 // @namespace    https://github.com/PashaKrch/lms-underwriting-tools
-// @version      1.5
+// @version      1.6
 // @description  Combined LMS underwriting helper menu with optional UW modules.
 // @author       Pavlo Korochenko
 // @match        *://*/*
@@ -52,7 +52,7 @@
       },
       {
         key: 'cssBronzeHighlighter',
-        name: 'CSS Bronze highlighter',
+        name: 'CSS Bronze Highlighter',
         note: 'Highlights new-customer Bronze CSS cases'
       },
       {
@@ -64,9 +64,9 @@
   };
 
   const RELEASE_NOTES = {
-    version: '1.5',
+    version: '1.6',
     storageKey: 'lms-uw-assistant-release-notes-seen-v1',
-    title: '🛠️ LMS UW Assistant updated to v1.5',
+    title: '🛠️ LMS UW Assistant updated to v1.6',
     lines: [
       "What's new:",
       '• Added CSS Bronze highlighter',
@@ -3751,8 +3751,10 @@ if (lmsUwAssistantModuleEnabled('dlStatusChecker')) {
 
       .dl-followup-status-pill {
         display: inline-block;
+        box-sizing: border-box;
+        min-height: 21px;
         margin-left: 5px;
-        padding: 2px 6px;
+        padding: 3px 6px;
         border-radius: 0;
         border: 1px solid #aaa;
         background: #f5f5f5;
