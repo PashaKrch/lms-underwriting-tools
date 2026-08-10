@@ -1,14 +1,15 @@
 // ==UserScript==
 // @name         LMS UW Assistant
 // @namespace    https://github.com/PashaKrch/lms-underwriting-tools
-// @version      1.4
+// @version      1.5
 // @description  Combined LMS underwriting helper menu with optional UW modules.
 // @author       Pavlo Korochenko
 // @match        *://*/*
 // @updateURL    https://raw.githubusercontent.com/PashaKrch/lms-underwriting-tools/main/LMS_UW_Assistant.user.js
 // @downloadURL  https://raw.githubusercontent.com/PashaKrch/lms-underwriting-tools/main/LMS_UW_Assistant.user.js
+// @connect      portal.decisionlogic.com
 // @run-at       document-idle
-// @grant        none
+// @grant        GM_xmlhttpRequest
 // ==/UserScript==
 
 (function () {
@@ -24,7 +25,9 @@
       followupHelper: true,
       dlFollowupScan: true,
       notificationStatusChecker: true,
-      tbwNotesDropdown: true
+      tbwNotesDropdown: true,
+      cssBronzeHighlighter: true,
+      dlStatusChecker: true
     },
     modules: [
       {
@@ -46,21 +49,28 @@
         key: 'tbwNotesDropdown',
         name: 'TBW Notes Dropdown',
         note: 'Sales/UW TBW quick notes dropdown'
+      },
+      {
+        key: 'cssBronzeHighlighter',
+        name: 'CSS Bronze highlighter',
+        note: 'Highlights new-customer Bronze CSS cases'
+      },
+      {
+        key: 'dlStatusChecker',
+        name: 'DL Status Checker',
+        note: 'Checks DecisionLogic follow-up statuses'
       }
     ]
   };
 
   const RELEASE_NOTES = {
-    version: '1.4',
+    version: '1.5',
     storageKey: 'lms-uw-assistant-release-notes-seen-v1',
-    title: '🛠️ LMS UW Assistant updated to v1.4',
+    title: '🛠️ LMS UW Assistant updated to v1.5',
     lines: [
       "What's new:",
-      '• Added TBW Notes Dropdown module',
-      '• Added Sales / UW mode switch in Notes window',
-      '• Sales mode uses Sales TBW reasons',
-      '• UW mode uses UW TBW reasons',
-      '• Module can be turned on/off from 🛠️ UW Tools'
+      '• Added CSS Bronze highlighter',
+      '• Added DL Status Checker'
     ]
   };
 
@@ -3265,5 +3275,1073 @@ if (lmsUwAssistantModuleEnabled('tbwNotesDropdown')) {
 
   } catch (error) {
     console.warn('[LMS UW Assistant] TBW Notes Dropdown failed to start:', error);
+  }
+}
+
+
+/* ============================================================
+   MODULE: CSS Bronze highlighter
+   Source: LMS Bronze CSS Highlighter v0.9
+   ============================================================ */
+if (lmsUwAssistantModuleEnabled('cssBronzeHighlighter')) {
+  try {
+
+(function () {
+  'use strict';
+
+  const STYLE_ID = 'uw-bronze-css-highlighter-style';
+  const HIGHLIGHT_CLASS = 'uw-bronze-css-highlight';
+  const ROW_ATTR = 'data-uw-bronze-css-match';
+
+  const SETTINGS = {
+    showCounterBadge: false,
+
+    // Pending Loans table:
+    // Loan Type = column 4  => 0-based index 3
+    // New/Renew = column 7  => 0-based index 6
+    // Origin    = column 12 => 0-based index 11
+    fallbackLoanTypeIndex: 3,
+    fallbackNewRenewIndex: 6,
+    fallbackOriginIndex: 11
+  };
+
+  const TARGET_ORIGINS = [
+    'customer site service',
+    'customer site',
+    'mobile site'
+  ];
+
+  function clean(text) {
+    return String(text || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function norm(text) {
+    return clean(text).toLowerCase();
+  }
+
+  function isTargetOrigin(text) {
+    return TARGET_ORIGINS.includes(norm(text));
+  }
+
+  function isLmsPage() {
+    return /\/plm\.net(?:\/|$)/i.test(window.location.href);
+  }
+
+  function isPendingLoansPage() {
+    const href = window.location.href;
+    const pathOk = /\/plm\.net\/reports\/LoansReport\.aspx/i.test(href);
+    const pendingOk = /(?:\?|&)reportpreset=pending(?:&|$)/i.test(window.location.search || href);
+
+    return pathOk && pendingOk;
+  }
+
+  function injectStyles() {
+    if (document.getElementById(STYLE_ID)) return;
+
+    const style = document.createElement('style');
+    style.id = STYLE_ID;
+    style.textContent = `
+      .${HIGHLIGHT_CLASS} {
+        color: #ff1493 !important;
+        font-weight: 600 !important;
+      }
+    `;
+
+    document.head.appendChild(style);
+  }
+
+  function getCells(row) {
+    return Array.from(row.children).filter(cell =>
+      /^(td|th)$/i.test(cell.tagName || '')
+    );
+  }
+
+  function getHeaderCells(table) {
+    const headerRow =
+      table.querySelector('thead tr') ||
+      Array.from(table.querySelectorAll('tr')).find(row =>
+        /Loan\s*Date\/Time/i.test(clean(row.textContent || '')) &&
+        /Origin/i.test(clean(row.textContent || ''))
+      );
+
+    return headerRow ? getCells(headerRow) : [];
+  }
+
+  function headerCellText(cell) {
+    return clean(cell?.textContent || '').replace(/\s+/g, ' ');
+  }
+
+  function getColumnIndexes(table) {
+    const headers = getHeaderCells(table);
+
+    let loanTypeIndex = -1;
+    let newRenewIndex = -1;
+    let originIndex = -1;
+
+    headers.forEach((cell, index) => {
+      const text = headerCellText(cell);
+      const sortClick = cell.querySelector('a.sortheader')?.getAttribute('onclick') || '';
+
+      if (
+        /Loan\s*Type/i.test(text) ||
+        /sort\s*\(\s*3\s*\)/i.test(sortClick)
+      ) {
+        loanTypeIndex = index;
+      }
+
+      if (
+        /^New\/Renew$/i.test(text) ||
+        /sort\s*\(\s*64\s*\)/i.test(sortClick)
+      ) {
+        newRenewIndex = index;
+      }
+
+      if (
+        /^Origin$/i.test(text) ||
+        /sort\s*\(\s*175\s*\)/i.test(sortClick)
+      ) {
+        originIndex = index;
+      }
+    });
+
+    return {
+      loanTypeIndex: loanTypeIndex >= 0 ? loanTypeIndex : SETTINGS.fallbackLoanTypeIndex,
+      newRenewIndex: newRenewIndex >= 0 ? newRenewIndex : SETTINGS.fallbackNewRenewIndex,
+      originIndex: originIndex >= 0 ? originIndex : SETTINGS.fallbackOriginIndex
+    };
+  }
+
+  function getReportTables() {
+    const exact = Array.from(document.querySelectorAll('table.DataTable.FixedHeader'));
+
+    if (exact.length) {
+      return exact;
+    }
+
+    return Array.from(document.querySelectorAll('table')).filter(table => {
+      const text = clean(table.textContent || '');
+      return /Loan\s*Date\/Time/i.test(text) &&
+        /Loan\s*Type/i.test(text) &&
+        /Origin/i.test(text);
+    });
+  }
+
+  function getReportRows(table) {
+    const bodyRows = Array.from(table.querySelectorAll('tbody tr'));
+
+    if (bodyRows.length) {
+      return bodyRows;
+    }
+
+    return Array.from(table.querySelectorAll('tr')).filter(row =>
+      row.querySelectorAll('td').length >= 12
+    );
+  }
+
+  function isPendingTargetRow(row, indexes) {
+    const cells = getCells(row);
+
+    if (cells.length <= Math.max(
+      indexes.loanTypeIndex,
+      indexes.newRenewIndex,
+      indexes.originIndex
+    )) {
+      return false;
+    }
+
+    const loanTypeText = norm(cells[indexes.loanTypeIndex]?.textContent);
+    const newRenewText = norm(cells[indexes.newRenewIndex]?.textContent);
+    const originText = norm(cells[indexes.originIndex]?.textContent);
+
+    return loanTypeText === 'bronze' &&
+      newRenewText === 'n' &&
+      isTargetOrigin(originText);
+  }
+
+  function setBronzeHighlight(cell, enabled) {
+    if (!cell) return false;
+
+    const isBronze = /^bronze$/i.test(clean(cell.textContent || ''));
+
+    if (!isBronze) {
+      cell.classList.remove(HIGHLIGHT_CLASS);
+      return false;
+    }
+
+    cell.classList.toggle(HIGHLIGHT_CLASS, Boolean(enabled));
+
+    return Boolean(enabled);
+  }
+
+  function scanPendingLoans() {
+    if (!isPendingLoansPage()) return 0;
+
+    let count = 0;
+
+    for (const table of getReportTables()) {
+      const indexes = getColumnIndexes(table);
+
+      for (const row of getReportRows(table)) {
+        const cells = getCells(row);
+        const loanTypeCell = cells[indexes.loanTypeIndex];
+
+        if (!isPendingTargetRow(row, indexes)) {
+          row.removeAttribute(ROW_ATTR);
+          setBronzeHighlight(loanTypeCell, false);
+          continue;
+        }
+
+        row.setAttribute(ROW_ATTR, '1');
+
+        if (setBronzeHighlight(loanTypeCell, true)) {
+          count += 1;
+        }
+      }
+    }
+
+    return count;
+  }
+
+  function getNextTd(cell) {
+    let node = cell?.nextElementSibling || null;
+
+    while (node && !/^td$/i.test(node.tagName || '')) {
+      node = node.nextElementSibling;
+    }
+
+    return node || null;
+  }
+
+  function findValueCellAfterLabel(labelRegex) {
+    const cells = Array.from(document.querySelectorAll('td'));
+
+    for (const cell of cells) {
+      const text = clean(cell.textContent || '');
+
+      if (!labelRegex.test(text)) continue;
+
+      const next = getNextTd(cell);
+      if (next) return next;
+    }
+
+    return null;
+  }
+
+  function hasTargetOriginInsideApplication() {
+    const rows = Array.from(document.querySelectorAll('tr'));
+
+    for (const row of rows) {
+      const cells = getCells(row);
+
+      for (let i = 0; i < cells.length - 1; i++) {
+        const label = clean(cells[i].textContent || '');
+        const value = clean(cells[i + 1].textContent || '');
+
+        if (/^Origin\s*:$/i.test(label) && isTargetOrigin(value)) {
+          return true;
+        }
+      }
+    }
+
+    return false;
+  }
+
+  function scanInsideApplication() {
+    if (isPendingLoansPage()) return 0;
+
+    const statusCell = findValueCellAfterLabel(/^Loyalty Status\s*:$/i);
+    const currentPointsCell = findValueCellAfterLabel(/^Loyalty Current Points\s*:$/i);
+    const requiredPointsCell = findValueCellAfterLabel(/^Loyalty Required Points\s*:$/i);
+
+    if (!statusCell || !currentPointsCell || !requiredPointsCell) {
+      return 0;
+    }
+
+    const hasBronzeStatus = /^Bronze$/i.test(clean(statusCell.textContent || ''));
+    const hasCurrentPoints = /^200$/i.test(clean(currentPointsCell.textContent || ''));
+    const hasRequiredPoints = /^500$/i.test(clean(requiredPointsCell.textContent || ''));
+    const hasTargetOrigin = hasTargetOriginInsideApplication();
+
+    const shouldHighlight =
+      hasBronzeStatus &&
+      hasCurrentPoints &&
+      hasRequiredPoints &&
+      hasTargetOrigin;
+
+    return setBronzeHighlight(statusCell, shouldHighlight) ? 1 : 0;
+  }
+
+  function scan() {
+    if (!isLmsPage()) return 0;
+
+    injectStyles();
+
+    const pendingCount = scanPendingLoans();
+    const applicationCount = scanInsideApplication();
+
+    return pendingCount + applicationCount;
+  }
+
+  function boot() {
+    if (!isLmsPage()) return;
+
+    // No MutationObserver on purpose:
+    // adding/removing DOM wrappers caused a visible second render on application pages.
+    // This version only toggles a CSS class on the exact Bronze cell.
+    scan();
+
+    setTimeout(scan, 700);
+    setTimeout(scan, 1600);
+
+    window.addEventListener('focus', scan);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
+})();
+
+  } catch (error) {
+    console.error('[LMS UW Assistant] CSS Bronze highlighter failed:', error);
+  }
+}
+
+
+/* ============================================================
+   MODULE: DL Status Checker
+   Source: LMS DL Follow-Up Status Checker v1.3
+   ============================================================ */
+if (lmsUwAssistantModuleEnabled('dlStatusChecker')) {
+  try {
+
+(function () {
+  'use strict';
+
+  const STYLE_ID = 'lms-dl-followup-status-checker-style';
+  const ROW_PROCESSED_ATTR = 'data-dl-followup-checker-processed';
+  const CODE_ATTR = 'data-dl-request-code';
+  const TOOLBAR_ID = 'lms-dl-followup-toolbar';
+
+  const DL_REPORTS_URL = 'https://portal.decisionlogic.com/Reports.aspx';
+  const DL_LOGIN_URL = 'https://portal.decisionlogic.com/Login.aspx';
+  const CRP_REPORT_BASE_URL = 'https://ibv.creditsense.ai/report/DecisionLogic/';
+
+  const STATUS_BY_COLOR = {
+    '#228822': {
+      label: 'Login, Verified',
+      className: 'dl-status-ok'
+    },
+    '#FFBF00': {
+      label: 'Account Error',
+      className: 'dl-status-warning'
+    },
+    '#CC3333': {
+      label: 'Bank Error',
+      className: 'dl-status-error'
+    },
+    '#A0A0A0': {
+      label: 'Started, Not Completed',
+      className: 'dl-status-muted'
+    },
+    '#D0D0D0': {
+      label: 'Not Started',
+      className: 'dl-status-light'
+    }
+  };
+
+  const resultCache = new Map();
+  let scanTimer = null;
+  let isCheckingAll = false;
+
+  function clean(text) {
+    return String(text || '').replace(/\s+/g, ' ').trim();
+  }
+
+  function isLmsCustomerPage() {
+    return /\/plm\.net\/customers\/CustomerDetails\.aspx/i.test(window.location.href) ||
+      Boolean(document.getElementById('ctl00_FollowUpsLink')) ||
+      Boolean(document.querySelector('.tr-followup'));
+  }
+
+  function injectStyles() {
+    if (document.getElementById(STYLE_ID)) return;
+
+    const style = document.createElement('style');
+    style.id = STYLE_ID;
+    style.textContent = `
+      #${TOOLBAR_ID} {
+        display: none;
+        margin-top: 17px;
+        margin-left: -5px;
+        clear: both;
+        white-space: nowrap;
+        position: relative;
+        top: 7px;
+        left: 0;
+      }
+
+      #${TOOLBAR_ID}.dl-has-codes {
+        display: block;
+      }
+
+      .dl-followup-action-cell {
+        white-space: nowrap;
+        padding-left: 4px;
+      }
+
+      .dl-followup-btn {
+        display: inline-block;
+        padding: 3px 9px;
+        border: 1px solid #777;
+        border-radius: 0;
+        background: #f5f5f5;
+        color: #111 !important;
+        font-family: Arial, sans-serif;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1.2;
+        text-decoration: none !important;
+        cursor: pointer;
+        user-select: none;
+        vertical-align: middle;
+        white-space: nowrap;
+      }
+
+      .dl-followup-btn:hover {
+        filter: brightness(0.96);
+      }
+
+      .dl-followup-btn[aria-disabled="true"] {
+        opacity: 0.65;
+        cursor: default;
+        pointer-events: none;
+      }
+
+      .dl-followup-open-crp-btn {
+        border-color: #7952b3;
+        background: #f1eafd;
+        color: #4b2c7a !important;
+        box-shadow: 0 0 0 1px rgba(121, 82, 179, 0.14);
+      }
+
+      .dl-followup-open-crp-btn:hover {
+        background: #e6d8fb;
+        border-color: #4b2c7a;
+      }
+
+      .dl-followup-check-all-btn {
+        box-sizing: border-box;
+        width: 82px;
+        min-width: 82px;
+        padding-left: 2px;
+        padding-right: 2px;
+        text-align: center;
+        border-color: #0d6efd;
+        background: #e7f1ff;
+        color: #084298 !important;
+        box-shadow: 0 0 0 1px rgba(13, 110, 253, 0.16);
+      }
+
+      .dl-followup-check-all-btn:hover {
+        background: #d8eaff;
+        border-color: #084298;
+      }
+
+      .dl-followup-status-pill {
+        display: inline-block;
+        margin-left: 5px;
+        padding: 2px 6px;
+        border-radius: 0;
+        border: 1px solid #aaa;
+        background: #f5f5f5;
+        color: #111;
+        font-family: Arial, sans-serif;
+        font-size: 11px;
+        font-weight: 700;
+        line-height: 1.2;
+        vertical-align: middle;
+        white-space: nowrap;
+      }
+
+      .dl-status-ok {
+        border-color: #228822;
+        background: #e8f5e8;
+        color: #145c14;
+      }
+
+      .dl-status-warning {
+        border-color: #d49a00;
+        background: #fff5d6;
+        color: #7a5600;
+      }
+
+      .dl-status-error {
+        border-color: #cc3333;
+        background: #fde7e7;
+        color: #992424;
+      }
+
+      .dl-status-muted {
+        border-color: #777;
+        background: #eeeeee;
+        color: #444;
+      }
+
+      .dl-status-light {
+        border-color: #b5b5b5;
+        background: #f7f7f7;
+        color: #777;
+      }
+
+      .dl-status-info {
+        border-color: #337ab7;
+        background: #e8f2fb;
+        color: #23527c;
+      }
+    `;
+
+    document.head.appendChild(style);
+  }
+
+  function extractRequestCode(text) {
+    const source = clean(text);
+
+    const requestCodeMatch = source.match(/\bRequest\s*Code\s*[:#-]?\s*([A-Z0-9]{6})\b/i);
+    if (requestCodeMatch) {
+      return requestCodeMatch[1].toUpperCase();
+    }
+
+    const dlUrlMatch = source.match(/(?:app\.decisionlogic\.com|DecisionLogic)\/([A-Z0-9]{6})\b/i);
+    if (dlUrlMatch) {
+      return dlUrlMatch[1].toUpperCase();
+    }
+
+    const candidates = source.match(/\b[A-Z0-9]{6}\b/g) || [];
+
+    for (const candidate of candidates) {
+      // DecisionLogic request codes can be mixed letters/numbers like BMQ6AR
+      // or letters-only like VHZLQS.
+      if (/^[A-Z0-9]{6}$/.test(candidate)) {
+        return candidate.toUpperCase();
+      }
+    }
+
+    return null;
+  }
+
+  function getFollowUpText(row) {
+    const textCell = row.querySelector('.td1') || row.cells?.[0] || row;
+    return clean(textCell.textContent || '');
+  }
+
+  function getActionRow(row) {
+    const actionTableRow = row.querySelector('.td2 table tr');
+    if (actionTableRow) return actionTableRow;
+
+    const td2 = row.querySelector('.td2');
+    if (td2) return td2;
+
+    return row;
+  }
+
+  function setStatus(row, status, code) {
+    let pill = row.querySelector('.dl-followup-status-pill');
+
+    if (!pill) {
+      pill = document.createElement('span');
+      pill.className = 'dl-followup-status-pill dl-status-info';
+
+      const actionCell = row.querySelector('.dl-followup-action-cell');
+      if (actionCell) {
+        actionCell.appendChild(pill);
+      } else {
+        row.appendChild(pill);
+      }
+    }
+
+    pill.className = `dl-followup-status-pill ${status.className || 'dl-status-info'}`;
+    pill.textContent = code ? `${code}: ${status.label}` : status.label;
+    pill.title = status.title || '';
+  }
+
+  function getDetectedRows() {
+    return Array.from(document.querySelectorAll('.tr-followup'))
+      .map(row => {
+        const code = row.getAttribute(CODE_ATTR) || extractRequestCode(getFollowUpText(row));
+        return code ? { row, code: code.toUpperCase() } : null;
+      })
+      .filter(Boolean);
+  }
+
+  function openCrp(code) {
+    window.open(CRP_REPORT_BASE_URL + encodeURIComponent(code), '_blank');
+  }
+
+  function addOpenCrpButtonToRow(row, code) {
+    const currentCode = row.getAttribute(CODE_ATTR);
+
+    if (row.getAttribute(ROW_PROCESSED_ATTR) === '1' && currentCode === code) {
+      return;
+    }
+
+    row.setAttribute(ROW_PROCESSED_ATTR, '1');
+    row.setAttribute(CODE_ATTR, code);
+
+    const oldCell = row.querySelector('.dl-followup-action-cell');
+    if (oldCell) oldCell.remove();
+
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.className = 'dl-followup-btn dl-followup-open-crp-btn';
+    button.textContent = 'Open in CRP';
+    button.title = `Open CRP report for ${code}`;
+
+    const actionCell = document.createElement('td');
+    actionCell.className = 'dl-followup-action-cell';
+    actionCell.appendChild(button);
+
+    const actionRow = getActionRow(row);
+
+    if (/^tr$/i.test(actionRow.tagName || '')) {
+      actionRow.appendChild(actionCell);
+    } else {
+      actionRow.appendChild(button);
+    }
+
+    button.addEventListener('click', (event) => {
+      event.preventDefault();
+      event.stopPropagation();
+      openCrp(code);
+    });
+  }
+
+  function findFollowUpsLabel() {
+    return document.getElementById('ctl00_FollowUpsLink') ||
+      Array.from(document.querySelectorAll('a, div, span, td, label, b, strong')).find(el =>
+        clean(el.textContent || '').startsWith('Follow-Ups')
+      );
+  }
+
+  function ensureToolbar() {
+    const label = findFollowUpsLabel();
+    if (!label) return null;
+
+    let toolbar = document.getElementById(TOOLBAR_ID);
+
+    if (!toolbar) {
+      toolbar = document.createElement('div');
+      toolbar.id = TOOLBAR_ID;
+
+      const checkAllButton = document.createElement('button');
+      checkAllButton.type = 'button';
+      checkAllButton.className = 'dl-followup-btn dl-followup-check-all-btn';
+      checkAllButton.textContent = 'Check DLs';
+      checkAllButton.title = 'Check all detected DecisionLogic follow-up request codes.';
+
+      toolbar.appendChild(checkAllButton);
+
+      const labelCell = label.closest('td');
+      if (labelCell) {
+        labelCell.appendChild(toolbar);
+      } else {
+        label.insertAdjacentElement('afterend', toolbar);
+      }
+
+      checkAllButton.addEventListener('click', async (event) => {
+        event.preventDefault();
+        event.stopPropagation();
+        await checkAllDetectedCodes();
+      });
+    }
+
+    updateToolbarVisibility();
+
+    return toolbar;
+  }
+
+  function updateToolbarVisibility() {
+    const toolbar = document.getElementById(TOOLBAR_ID);
+    if (!toolbar) return;
+
+    const rows = getDetectedRows();
+    const uniqueCodes = new Set(rows.map(item => item.code));
+
+    toolbar.classList.toggle('dl-has-codes', uniqueCodes.size > 0);
+  }
+
+  function setCheckAllButtonBusy(busy, label = null) {
+    const toolbar = document.getElementById(TOOLBAR_ID);
+    const button = toolbar?.querySelector('.dl-followup-check-all-btn');
+
+    if (!button) return;
+
+    button.setAttribute('aria-disabled', busy ? 'true' : 'false');
+    button.textContent = label || (busy ? 'Loading...' : 'Check DLs');
+  }
+
+  async function checkAllDetectedCodes() {
+    if (isCheckingAll) return;
+
+    const items = getDetectedRows();
+
+    if (!items.length) {
+      alert('No DecisionLogic request codes were detected in Follow-Ups.');
+      return;
+    }
+
+    const grouped = new Map();
+
+    for (const item of items) {
+      if (!grouped.has(item.code)) grouped.set(item.code, []);
+      grouped.get(item.code).push(item.row);
+    }
+
+    isCheckingAll = true;
+    setCheckAllButtonBusy(true, 'Loading...');
+
+    let index = 0;
+
+    try {
+      for (const [code, rows] of grouped.entries()) {
+        index += 1;
+        setCheckAllButtonBusy(true, 'Loading...');
+
+        rows.forEach(row => {
+          setStatus(row, { label: 'Checking...', className: 'dl-status-info' }, code);
+        });
+
+        let result;
+
+        try {
+          result = await checkDecisionLogicStatus(code);
+        } catch (error) {
+          result = {
+            loginNeeded: false,
+            status: {
+              label: 'Error',
+              className: 'dl-status-error',
+              title: error?.message || String(error || 'Unknown error')
+            }
+          };
+        }
+
+        if (result.loginNeeded) {
+          rows.forEach(row => {
+            setStatus(row, {
+              label: 'Login needed',
+              className: 'dl-status-warning',
+              title: 'Please log in to DecisionLogic first.'
+            }, code);
+          });
+
+          alert('Please log in to DecisionLogic first, then click Check DLs again.');
+          window.open(DL_LOGIN_URL, '_blank');
+          break;
+        }
+
+        rows.forEach(row => {
+          setStatus(row, result.status, code);
+        });
+      }
+    } finally {
+      isCheckingAll = false;
+      setCheckAllButtonBusy(false, 'Check DLs');
+    }
+  }
+
+  function scanFollowUps() {
+    if (!isLmsCustomerPage()) return;
+
+    injectStyles();
+
+    const rows = Array.from(document.querySelectorAll('.tr-followup'));
+
+    for (const row of rows) {
+      const text = getFollowUpText(row);
+      const code = extractRequestCode(text);
+
+      if (!code) continue;
+
+      addOpenCrpButtonToRow(row, code);
+    }
+
+    ensureToolbar();
+  }
+
+  function scheduleScan() {
+    if (scanTimer) clearTimeout(scanTimer);
+
+    scanTimer = setTimeout(() => {
+      scanTimer = null;
+      scanFollowUps();
+    }, 250);
+  }
+
+  function gmRequest(options) {
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        ...options,
+        timeout: options.timeout || 20000,
+        anonymous: false,
+        onload: resolve,
+        onerror: reject,
+        ontimeout: () => reject(new Error('DecisionLogic request timed out.'))
+      });
+    });
+  }
+
+  function parseHtml(html) {
+    return new DOMParser().parseFromString(String(html || ''), 'text/html');
+  }
+
+  function isLoginResponse(response, doc) {
+    const finalUrl = response?.finalUrl || response?.responseURL || '';
+
+    if (/\/Login\.aspx/i.test(finalUrl)) return true;
+    if (doc.querySelector('input[type="password"]')) return true;
+    if (doc.querySelector('form[action*="Login.aspx" i]')) return true;
+
+    const title = clean(doc.title || '');
+    const bodyText = clean(doc.body?.textContent || '');
+
+    return /login/i.test(title) && /password/i.test(bodyText);
+  }
+
+  function buildReportsPostPayload(doc, code) {
+    const form = doc.querySelector('form');
+
+    if (!form) {
+      throw new Error('DecisionLogic Reports form was not found.');
+    }
+
+    const params = new URLSearchParams();
+
+    form.querySelectorAll('input, select, textarea').forEach(element => {
+      const name = element.getAttribute('name');
+      if (!name) return;
+
+      const tag = (element.tagName || '').toLowerCase();
+      const type = (element.getAttribute('type') || '').toLowerCase();
+
+      if (type === 'submit' || type === 'button' || type === 'image' || type === 'file') {
+        return;
+      }
+
+      if ((type === 'checkbox' || type === 'radio') && !element.checked) {
+        return;
+      }
+
+      if (tag === 'select') {
+        const selected = Array.from(element.options || []).filter(option => option.selected);
+
+        if (element.multiple) {
+          selected.forEach(option => params.append(name, option.value));
+        } else {
+          params.append(name, selected[0]?.value || element.value || '');
+        }
+
+        return;
+      }
+
+      params.append(name, element.value || '');
+    });
+
+    const requestInput =
+      form.querySelector('#ctl00_ctl00_MainContent_MainContent_tbRequestCode') ||
+      form.querySelector('input[name$="$tbRequestCode"]') ||
+      form.querySelector('input[id$="_tbRequestCode"]');
+
+    const requestName =
+      requestInput?.getAttribute('name') ||
+      'ctl00$ctl00$MainContent$MainContent$tbRequestCode';
+
+    params.set(requestName, code);
+
+    const updateButton =
+      form.querySelector('#ctl00_ctl00_MainContent_MainContent_btnUpdate') ||
+      form.querySelector('input[name$="$btnUpdate"]') ||
+      form.querySelector('input[id$="_btnUpdate"]');
+
+    const buttonName =
+      updateButton?.getAttribute('name') ||
+      'ctl00$ctl00$MainContent$MainContent$btnUpdate';
+
+    params.set(buttonName, updateButton?.getAttribute('value') || 'Update');
+
+    const action = form.getAttribute('action') || 'Reports.aspx';
+    const actionUrl = new URL(action, DL_REPORTS_URL).href;
+
+    return {
+      actionUrl,
+      body: params.toString()
+    };
+  }
+
+  function normalizeHexColor(color) {
+    const raw = clean(color).toUpperCase();
+
+    if (!raw) return '';
+
+    if (raw.startsWith('#')) {
+      if (/^#[0-9A-F]{3}$/i.test(raw)) {
+        return '#' + raw.slice(1).split('').map(ch => ch + ch).join('').toUpperCase();
+      }
+
+      return raw;
+    }
+
+    const rgbMatch = raw.match(/RGBA?\s*\(\s*(\d{1,3})\s*,\s*(\d{1,3})\s*,\s*(\d{1,3})/i);
+
+    if (rgbMatch) {
+      return '#' + [rgbMatch[1], rgbMatch[2], rgbMatch[3]].map(value => {
+        const n = Math.max(0, Math.min(255, Number(value) || 0));
+        return n.toString(16).padStart(2, '0').toUpperCase();
+      }).join('');
+    }
+
+    return raw;
+  }
+
+  function getBackgroundColorFromStyle(element) {
+    const styleText = element.getAttribute('style') || '';
+    const inlineMatch = styleText.match(/background(?:-color)?\s*:\s*([^;]+)/i);
+
+    if (inlineMatch) {
+      return normalizeHexColor(inlineMatch[1]);
+    }
+
+    return normalizeHexColor(element.style?.backgroundColor || '');
+  }
+
+  function parseDecisionLogicStatus(html, code) {
+    const doc = parseHtml(html);
+
+    const links = Array.from(doc.querySelectorAll('a[id$="_hyRequestCode"], a[href*="requestCode="]'));
+
+    const reportLink = links.find(link => {
+      const linkText = clean(link.textContent).toUpperCase();
+      const href = link.getAttribute('href') || '';
+
+      return linkText === code.toUpperCase() ||
+        new RegExp(`requestCode=${code}\\b`, 'i').test(href);
+    });
+
+    if (!reportLink) {
+      return {
+        label: 'Not found',
+        className: 'dl-status-muted',
+        title: 'No matching DecisionLogic report was found.'
+      };
+    }
+
+    const row = reportLink.closest('tr');
+
+    if (!row) {
+      return {
+        label: 'Found, status unknown',
+        className: 'dl-status-info',
+        title: 'Report was found, but result row was not detected.'
+      };
+    }
+
+    const colorDivs = Array.from(row.querySelectorAll('div')).filter(div =>
+      /background/i.test(div.getAttribute('style') || '') ||
+      div.style?.backgroundColor
+    );
+
+    for (const div of colorDivs) {
+      const color = getBackgroundColorFromStyle(div);
+      const mapped = STATUS_BY_COLOR[color];
+
+      if (mapped) {
+        return {
+          ...mapped,
+          title: `DecisionLogic color: ${color}`
+        };
+      }
+    }
+
+    return {
+      label: 'Found, status unknown',
+      className: 'dl-status-info',
+      title: 'Report was found, but status color was not recognized.'
+    };
+  }
+
+  async function checkDecisionLogicStatus(code) {
+    const normalizedCode = String(code || '').toUpperCase();
+
+    if (resultCache.has(normalizedCode)) {
+      return resultCache.get(normalizedCode);
+    }
+
+    const reportsResponse = await gmRequest({
+      method: 'GET',
+      url: DL_REPORTS_URL,
+      headers: {
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+      }
+    });
+
+    const reportsDoc = parseHtml(reportsResponse.responseText);
+
+    if (isLoginResponse(reportsResponse, reportsDoc)) {
+      return { loginNeeded: true };
+    }
+
+    const post = buildReportsPostPayload(reportsDoc, normalizedCode);
+
+    const searchResponse = await gmRequest({
+      method: 'POST',
+      url: post.actionUrl,
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8'
+      },
+      data: post.body
+    });
+
+    const searchDoc = parseHtml(searchResponse.responseText);
+
+    if (isLoginResponse(searchResponse, searchDoc)) {
+      return { loginNeeded: true };
+    }
+
+    const status = parseDecisionLogicStatus(searchResponse.responseText, normalizedCode);
+    const result = { loginNeeded: false, status };
+
+    resultCache.set(normalizedCode, result);
+    return result;
+  }
+
+  function boot() {
+    if (!isLmsCustomerPage()) return;
+
+    scanFollowUps();
+
+    setTimeout(scanFollowUps, 800);
+    setTimeout(scanFollowUps, 2000);
+    setTimeout(scanFollowUps, 4000);
+
+    const observer = new MutationObserver(scheduleScan);
+    observer.observe(document.documentElement || document.body, {
+      childList: true,
+      subtree: true
+    });
+
+    window.addEventListener('focus', scheduleScan);
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
+})();
+
+  } catch (error) {
+    console.error('[LMS UW Assistant] DL Status Checker failed:', error);
   }
 }
