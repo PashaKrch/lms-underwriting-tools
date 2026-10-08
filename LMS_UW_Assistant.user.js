@@ -1,7 +1,7 @@
 // ==UserScript==
 // @name         LMS UW Assistant
 // @namespace    https://github.com/PashaKrch/lms-underwriting-tools
-// @version      1.6
+// @version      1.7
 // @description  Combined LMS underwriting helper menu with optional UW modules.
 // @author       Pavlo Korochenko
 // @match        *://*/*
@@ -27,7 +27,8 @@
       notificationStatusChecker: true,
       tbwNotesDropdown: true,
       cssBronzeHighlighter: true,
-      dlStatusChecker: true
+      dlStatusChecker: true,
+      militaryIncomeAlert: true
     },
     modules: [
       {
@@ -59,18 +60,23 @@
         key: 'dlStatusChecker',
         name: 'DL Status Checker',
         note: 'Checks DecisionLogic follow-up statuses'
+      },
+      {
+        key: 'militaryIncomeAlert',
+        name: 'Military Income Alert',
+        note: 'Popup when a credit/income label matches DOD/military pay patterns (CRP report)'
       }
     ]
   };
 
   const RELEASE_NOTES = {
-    version: '1.6',
+    version: '1.7',
     storageKey: 'lms-uw-assistant-release-notes-seen-v1',
-    title: '🛠️ LMS UW Assistant updated to v1.6',
+    title: '🛠️ LMS UW Assistant updated to v1.7',
     lines: [
       "What's new:",
-      '• Added CSS Bronze highlighter',
-      '• Added DL Status Checker'
+      '• Refreshed menu/panel layout to match native LMS style',
+      '• Added Military Income Alert (CRP report)'
     ]
   };
 
@@ -143,6 +149,8 @@
       font-size:14px;
       margin-bottom:10px;
       color:#fff;
+      text-transform:uppercase;
+      letter-spacing:.3px;
     `;
 
     const body = document.createElement('div');
@@ -247,24 +255,33 @@
         justify-content: center;
         color: White !important;
         cursor: pointer;
-        padding: 0 8px !important;
+        padding: 0 10px !important;
         margin: 0 !important;
-        height: 17px;
-        line-height: 17px;
-        font-family: Arial, Helvetica, sans-serif;
+        height: 30px;
+        line-height: 30px;
+        font-family: "Segoe UI", Arial, Helvetica, sans-serif;
         font-size: 12px;
         font-weight: normal;
-        text-shadow: none;
-        text-transform: none;
+        text-shadow: 1px 1px 0px rgb(0,0,0);
+        text-transform: uppercase;
+        letter-spacing: .2px;
         white-space: nowrap;
         background: transparent;
         border: 0;
+        outline: none;
         pointer-events: auto;
+      }
+
+      #${APP.menuId}:focus,
+      #${APP.menuId}:focus-visible {
+        outline: none;
       }
 
       #${APP.menuId}.uw-open,
       #${APP.menuId}:hover {
-        background: rgba(255,255,255,0.16);
+        background: rgb(175,209,255);
+        color: black !important;
+        text-shadow: none;
       }
 
       #${APP.dropdownId} {
@@ -274,12 +291,12 @@
         max-width: 380px;
         box-sizing: border-box;
         border-collapse: collapse;
-        background: #1f1f1f;
+        background: rgba(8,8,8,0.9);
         color: White;
-        border: 1px solid #050505;
-        box-shadow: 2px 3px 8px rgba(0,0,0,0.35);
-        font-family: Arial, Helvetica, sans-serif;
-        font-size: 12px;
+        border: 0;
+        box-shadow: 0 6px 18px rgba(0,0,0,0.32);
+        font-family: "Segoe UI", Arial, Helvetica, sans-serif;
+        font-size: 13px;
         display: none;
       }
 
@@ -287,17 +304,8 @@
         display: block;
       }
 
-      #${APP.dropdownId} .uw-head {
-        padding: 6px 9px;
-        background: #101010;
-        color: White;
-        font-weight: bold;
-        font-size: 12px;
-        border-bottom: 1px solid #3a3a3a;
-      }
-
       #${APP.dropdownId} .uw-body {
-        padding: 0;
+        padding: 0 0 3px;
       }
 
       #${APP.dropdownId} .uw-row {
@@ -305,45 +313,49 @@
         align-items: center;
         justify-content: space-between;
         gap: 10px;
-        padding: 6px 9px;
-        border-bottom: 1px solid rgba(255,255,255,0.16);
+        padding: 10px 10px;
         color: White;
         cursor: default;
+        transition: background .2s ease;
       }
 
       #${APP.dropdownId} .uw-row:hover {
-        background: rgba(255,255,255,0.14);
+        background: rgb(175,209,255);
       }
 
-      #${APP.dropdownId} .uw-row:last-child {
-        border-bottom: 0;
+      #${APP.dropdownId} .uw-row:hover .uw-name,
+      #${APP.dropdownId} .uw-row:hover .uw-note {
+        color: black;
+        text-shadow: none;
       }
 
       #${APP.dropdownId} .uw-name {
         font-weight: normal;
         font-size: 12px;
         color: White;
-        text-transform: none;
+        text-shadow: 1px 1px 0px rgb(0,0,0);
+        text-transform: uppercase;
+        letter-spacing: .2px;
       }
 
       #${APP.dropdownId} .uw-note {
         margin-top: 2px;
-        font-size: 11px;
+        font-size: 12px;
         color: #e6e6e6;
         line-height: 1.25;
       }
 
       #${APP.dropdownId} .uw-switch {
-        width: 39px;
-        height: 20px;
+        width: 36px;
+        height: 18px;
         border-radius: 999px;
-        border: 1px solid rgba(255,255,255,0.65);
+        border: 0;
         padding: 0;
         cursor: pointer;
-        background: #6b6b6b;
+        background: #ccc;
         position: relative;
         flex: 0 0 auto;
-        transition: background .15s ease;
+        transition: background .3s ease;
       }
 
       #${APP.dropdownId} .uw-switch::after {
@@ -355,24 +367,23 @@
         height: 14px;
         border-radius: 50%;
         background: #fff;
-        transition: left .15s ease;
+        transition: left .3s ease;
       }
 
       #${APP.dropdownId} .uw-switch.uw-on {
-        background: #36a853;
+        background: #4CAF50;
       }
 
       #${APP.dropdownId} .uw-switch.uw-on::after {
-        left: 21px;
+        left: 20px;
       }
 
       #${APP.dropdownId} .uw-footer {
-        padding: 6px 9px;
-        border-top: 1px solid rgba(255,255,255,0.16);
+        padding: 8px 10px;
         color: #e6e6e6;
-        font-size: 11px;
+        font-size: 12px;
         line-height: 1.35;
-        background: #141414;
+        background: transparent;
       }
 
       #${APP.dropdownId} .uw-footer button {
@@ -400,7 +411,6 @@
     const settings = getSettings();
 
     dropdown.innerHTML = `
-      <div class="uw-head">🛠️ LMS UW Assistant</div>
       <div class="uw-body">
         ${APP.modules.map(module => `
           <div class="uw-row" data-module-row="${module.key}">
@@ -417,7 +427,7 @@
         `).join('')}
       </div>
       <div class="uw-footer">
-        Refresh after changes.
+        Refresh after changes
         <button type="button" id="lms-uw-assistant-refresh-btn">Refresh</button>
       </div>
     `;
@@ -1067,7 +1077,7 @@ if (lmsUwAssistantModuleEnabled('followupHelper')) {
     `;
 
     panel.innerHTML = `
-      <div style="font-weight:bold;margin-bottom:6px;color:#006ea8;font-size:14px;">UW Canned Follow-Up</div>
+      <div style="font-weight:bold;margin-bottom:6px;color:#006ea8;font-size:14px;text-transform:uppercase;letter-spacing:.3px;">UW Canned Follow-Up</div>
       <div id="uw-detected-admin" style="font-size:11px;color:#666;margin-bottom:6px;">Detected Processing Admin: checking...</div>
 
       <label style="font-weight:bold;display:block;margin-bottom:3px;">UW Type:</label>
@@ -1405,6 +1415,19 @@ if (lmsUwAssistantModuleEnabled('dlFollowupScan')) {
         margin-bottom: 7px;
         cursor: move;
         user-select: none;
+        text-transform: uppercase;
+        letter-spacing: .3px;
+      }
+
+      #${PANEL_ID} .uw-dl-toolbar {
+        display: flex;
+        gap: 6px;
+        margin-bottom: 7px;
+      }
+
+      #${PANEL_ID} .uw-dl-toolbar button {
+        flex: 1;
+        margin-right: 0;
       }
 
       #${PANEL_ID} button {
@@ -1415,6 +1438,8 @@ if (lmsUwAssistantModuleEnabled('dlFollowupScan')) {
         font-weight: bold;
         font-size: 12px;
         margin-right: 5px;
+        text-transform: uppercase;
+        letter-spacing: .2px;
       }
 
       #uw-need-dl-scan-btn {
@@ -1534,19 +1559,13 @@ if (lmsUwAssistantModuleEnabled('dlFollowupScan')) {
 
     if (status) {
       const parts = [
-        `Rows/customers: ${state.total}`,
-        `Checked: ${state.checked}`,
-        `Found: ${state.found}`,
-        `Failed: ${state.failed}`
+        `Checked: ${state.checked} / ${state.total}`,
+        `Found: ${state.found}`
       ];
-
-      if (state.skipped) {
-        parts.push(`Skipped: ${state.skipped}`);
-      }
 
       status.innerHTML = `
         <div>${parts.join(' / ')}</div>
-        <div>${extraText || (state.running ? 'Scanning...' : 'Ready.')}</div>
+        <div>${extraText || (state.running ? 'Scanning...' : '')}</div>
       `;
     }
 
@@ -1567,24 +1586,23 @@ if (lmsUwAssistantModuleEnabled('dlFollowupScan')) {
     const panel = document.createElement('div');
     panel.id = PANEL_ID;
     panel.innerHTML = `
-      <div class="uw-title">DL follow up scan</div>
+      <div class="uw-title">DL Follow-Up Scan</div>
 
-      <div style="margin-bottom:7px;">
-        <button id="uw-need-dl-scan-btn" type="button">Scan visible rows</button>
+      <div class="uw-dl-toolbar">
+        <button id="uw-need-dl-scan-btn" type="button">Scan Visible Rows</button>
         <button id="uw-need-dl-stop-btn" type="button" disabled>Stop</button>
         <button id="uw-need-dl-clear-btn" type="button">Clear</button>
       </div>
 
-
       <div style="font-size:11px; color:#666;">
-        Read-only. Yellow row = matching Need DL follow-up. Drag the title to move this panel.
+        Yellow row = matching Need DL follow-up.
       </div>
 
       <div id="uw-need-dl-progress-wrap">
         <div id="uw-need-dl-progress"></div>
       </div>
 
-      <div id="uw-need-dl-status">Ready.</div>
+      <div id="uw-need-dl-status"></div>
     `;
 
     document.body.appendChild(panel);
@@ -1931,7 +1949,7 @@ if (lmsUwAssistantModuleEnabled('dlFollowupScan')) {
   function boot() {
     if (!isPendingLoansReport()) return;
     createPanel();
-    updateStatus('Ready. Apply the Bank account verification = Yes filter, then scan.');
+    updateStatus('Apply the Bank account verification = Yes filter, then scan.');
   }
 
   boot();
@@ -4345,5 +4363,293 @@ if (lmsUwAssistantModuleEnabled('dlStatusChecker')) {
 
   } catch (error) {
     console.error('[LMS UW Assistant] DL Status Checker failed:', error);
+  }
+}
+
+/* ============================================================
+   MODULE: Military Income Alert
+   Source: new (CRP report page, not LMS)
+   ============================================================ */
+if (lmsUwAssistantModuleEnabled('militaryIncomeAlert')) {
+  try {
+
+(function () {
+  'use strict';
+
+  const STYLE_ID = 'uw-military-income-alert-style';
+  const CONTAINER_ID = 'uw-military-income-alert-toast';
+
+  const PATTERNS = [
+    { label: 'DFAS-CLEVELAND', regex: /\bDFAS[\s-]*CLEVELAND\b/i },
+    { label: 'DFAS-IN', regex: /\bDFAS[\s-]*IN\b/i },
+    { label: 'DFAS', regex: /\bDFAS\b/i },
+    { label: 'Department of Defense', regex: /\bDEPARTMENT\s+OF\s+DEFENSE\b/i },
+    { label: 'Dept of Defense', regex: /\bDEPT\.?\s+OF\s+DEFENSE\b/i },
+    { label: 'DOD', regex: /\bDOD\b/i },
+    { label: 'ARMY RC', regex: /\bARMY[\s-]*RC\b/i },
+    { label: 'ARMY ACT', regex: /\bARMY[\s-]*ACT\b/i },
+    { label: 'NAVY ACT', regex: /\bNAVY[\s-]*ACT\b/i },
+    { label: 'CIVFED SAL', regex: /\bCIVFED[\s-]*SAL\b/i },
+    { label: 'DCPS', regex: /\bDCPS\b/i },
+    { label: 'Marine Corps Total Fitness', regex: /\bMARINE\s+CORPS\s+TOTAL\s+FITNESS\b/i },
+    { label: 'MCTF', regex: /\bMCTF\b/i },
+    { label: 'Military Payroll Income', regex: /\bMILITARY\s+PAYROLL\s+INCOME\b/i }
+  ];
+
+  const ROW_SELECTOR = 'tr[data-testid^="BankReport.Transactions.TransactionsTable-"][data-testid$=".TableRow"]';
+  const RISK_FACTOR_SELECTOR = '[data-testid^="BankReport.ExposureRiskFactors.RiskFactor-"][data-testid$=".Chip"]';
+
+  const state = {
+    processedRows: new Set(),
+    processedRiskFactors: new Set(),
+    // Transactions are the primary signal. Once a transaction-based match has
+    // fired, the Risk Factors chip is never used as a fallback trigger again.
+    transactionMatchFound: false,
+    scheduled: null
+  };
+
+  function isCrpReportPage() {
+    return /(^|\.)ibv\.creditsense\.ai$/i.test(window.location.hostname) &&
+      /^\/report(?:\/|$)/i.test(window.location.pathname);
+  }
+
+  function injectStyles() {
+    if (document.getElementById(STYLE_ID)) return;
+
+    const style = document.createElement('style');
+    style.id = STYLE_ID;
+    style.textContent = `
+      #${CONTAINER_ID} {
+        position: fixed;
+        top: 13px;
+        right: 563px;
+        z-index: 999999;
+        max-width: 320px;
+      }
+
+      #${CONTAINER_ID} .uw-mia-card {
+        position: relative;
+        background: #ffffff;
+        border-left: 5px solid #d9534f;
+        border-radius: 10px;
+        box-shadow: 0 8px 24px rgba(0,0,0,0.18);
+        padding: 14px 34px 14px 16px;
+        font-family: -apple-system, "Segoe UI", Arial, sans-serif;
+        color: #26324a;
+        animation: uw-mia-slide-in .2s ease-out;
+      }
+
+      @keyframes uw-mia-slide-in {
+        from { transform: translateX(24px); opacity: 0; }
+        to { transform: translateX(0); opacity: 1; }
+      }
+
+      #${CONTAINER_ID} .uw-mia-title {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-weight: 700;
+        font-size: 15px;
+        margin-bottom: 6px;
+        color: #a4312b;
+      }
+
+      #${CONTAINER_ID} .uw-mia-matches {
+        display: inline-block;
+        padding: 4px 10px;
+        border-radius: 999px;
+        background: #fdecea;
+        font-size: 14px;
+        font-weight: 700;
+        color: #a4312b;
+        word-break: break-word;
+      }
+
+      #${CONTAINER_ID} .uw-mia-close {
+        position: absolute;
+        top: 8px;
+        right: 10px;
+        border: 0;
+        background: transparent;
+        font-size: 15px;
+        line-height: 1;
+        cursor: pointer;
+        color: #8a93a6;
+        padding: 2px;
+      }
+
+      #${CONTAINER_ID} .uw-mia-close:hover {
+        color: #26324a;
+      }
+    `;
+
+    document.head.appendChild(style);
+  }
+
+  function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, (ch) => ({
+      '&': '&amp;',
+      '<': '&lt;',
+      '>': '&gt;',
+      '"': '&quot;',
+      "'": '&#39;'
+    }[ch]));
+  }
+
+  function ensureContainer() {
+    injectStyles();
+
+    let container = document.getElementById(CONTAINER_ID);
+    if (!container) {
+      container = document.createElement('div');
+      container.id = CONTAINER_ID;
+      document.body.appendChild(container);
+    }
+    return container;
+  }
+
+  // Only one popup is shown at a time: a new match replaces whatever is
+  // currently displayed instead of stacking another card underneath it.
+  function showToast(matches) {
+    const container = ensureContainer();
+    container.innerHTML = '';
+
+    const card = document.createElement('div');
+    card.className = 'uw-mia-card';
+    card.innerHTML = `
+      <button type="button" class="uw-mia-close" aria-label="Close">&times;</button>
+      <div class="uw-mia-title">\u{1F396}️ Possible Military Income</div>
+      <div class="uw-mia-matches">${escapeHtml(matches.map(m => m.toUpperCase()).join(', '))}</div>
+    `;
+
+    container.appendChild(card);
+
+    card.querySelector('.uw-mia-close').addEventListener('click', () => {
+      card.remove();
+    });
+  }
+
+  function matchPatterns(text) {
+    const found = [];
+    for (const pattern of PATTERNS) {
+      if (pattern.regex.test(text) && !found.includes(pattern.label)) {
+        found.push(pattern.label);
+      }
+    }
+    return found;
+  }
+
+  function getRowPrefix(row) {
+    const testId = row.getAttribute('data-testid') || '';
+    const suffix = '.TableRow';
+    if (!testId.endsWith(suffix)) return null;
+    return testId.slice(0, testId.length - suffix.length);
+  }
+
+  function getCellText(row, prefix, field) {
+    const cell = row.querySelector(`[data-testid="${prefix}-${field}.TableCell"]`);
+    if (!cell) return '';
+    return (cell.innerText || cell.textContent || '').trim();
+  }
+
+  function parseAmount(text) {
+    if (!text) return NaN;
+    const cleaned = text.replace(/[^0-9.\-]/g, '');
+    if (!cleaned) return NaN;
+    return parseFloat(cleaned);
+  }
+
+  // Source 1: individual credit/income transaction rows.
+  function scanTransactions() {
+    const rows = Array.from(document.querySelectorAll(ROW_SELECTOR));
+
+    for (const row of rows) {
+      const prefix = getRowPrefix(row);
+      if (!prefix) continue;
+
+      const rowId = row.getAttribute('data-row-id') || prefix;
+      if (state.processedRows.has(rowId)) continue;
+
+      const amount = parseAmount(getCellText(row, prefix, 'amount'));
+      // Only credit/income transactions (money coming in), not debits.
+      if (!(amount > 0)) continue;
+
+      const description = getCellText(row, prefix, 'description');
+      const company = getCellText(row, prefix, 'company');
+      const label = [description, company].filter(Boolean).join(' ');
+      if (!label) continue;
+
+      const matches = matchPatterns(label);
+      if (matches.length) {
+        state.processedRows.add(rowId);
+        state.transactionMatchFound = true;
+        showToast(matches);
+      }
+    }
+  }
+
+  // Source 2 (fallback only): CRP's own "Risk Factors" chips, e.g.
+  // "DFAS / Military Payroll Income Detected". This only runs when the
+  // transactions table hasn't produced a match (transactions are primary).
+  function scanRiskFactors() {
+    const chips = Array.from(document.querySelectorAll(RISK_FACTOR_SELECTOR));
+
+    for (const chip of chips) {
+      const chipId = chip.getAttribute('data-testid') || '';
+      if (!chipId || state.processedRiskFactors.has(chipId)) continue;
+
+      const text = (chip.innerText || chip.textContent || '').trim();
+      if (!text) continue;
+
+      const matches = matchPatterns(text);
+      if (matches.length) {
+        state.processedRiskFactors.add(chipId);
+        showToast(matches);
+      }
+    }
+  }
+
+  function scan() {
+    scanTransactions();
+
+    // Fallback: only look at Risk Factors chips if no transaction-based
+    // match has ever fired (transactions are the primary signal).
+    if (!state.transactionMatchFound) {
+      scanRiskFactors();
+    }
+  }
+
+  function scheduleScan() {
+    if (state.scheduled) return;
+
+    state.scheduled = setTimeout(() => {
+      state.scheduled = null;
+      scan();
+    }, 600);
+  }
+
+  function boot() {
+    if (!isCrpReportPage()) return;
+
+    scan();
+    setTimeout(scan, 1500);
+    setTimeout(scan, 3500);
+
+    const observer = new MutationObserver(scheduleScan);
+    observer.observe(document.documentElement || document.body, {
+      childList: true,
+      subtree: true
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
+})();
+
+  } catch (error) {
+    console.warn('[LMS UW Assistant] Military Income Alert failed to start:', error);
   }
 }
