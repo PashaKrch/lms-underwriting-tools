@@ -1,13 +1,15 @@
 // ==UserScript==
 // @name         LMS UW Assistant
 // @namespace    https://github.com/PashaKrch/lms-underwriting-tools
-// @version      1.7
+// @version      1.8
 // @description  Combined LMS underwriting helper menu with optional UW modules.
 // @author       Pavlo Korochenko
 // @match        *://*/*
 // @updateURL    https://raw.githubusercontent.com/PashaKrch/lms-underwriting-tools/main/LMS_UW_Assistant.user.js
 // @downloadURL  https://raw.githubusercontent.com/PashaKrch/lms-underwriting-tools/main/LMS_UW_Assistant.user.js
 // @connect      portal.decisionlogic.com
+// @connect      docs.google.com
+// @connect      googleusercontent.com
 // @run-at       document-idle
 // @grant        GM_xmlhttpRequest
 // ==/UserScript==
@@ -28,7 +30,8 @@
       tbwNotesDropdown: true,
       cssBronzeHighlighter: true,
       dlStatusChecker: true,
-      militaryIncomeAlert: true
+      militaryIncomeAlert: true,
+      abaNumberMatcher: true
     },
     modules: [
       {
@@ -65,18 +68,24 @@
         key: 'militaryIncomeAlert',
         name: 'Military Income Alert',
         note: 'Popup when a credit/income label matches DOD/military pay patterns (CRP report)'
+      },
+      {
+        key: 'abaNumberMatcher',
+        name: 'ABA Number Matcher',
+        note: 'Matches ABA/routing numbers against the Google Sheet list in real time'
       }
     ]
   };
 
   const RELEASE_NOTES = {
-    version: '1.7',
+    version: '1.8',
     storageKey: 'lms-uw-assistant-release-notes-seen-v1',
-    title: '🛠️ LMS UW Assistant updated to v1.7',
+    title: '🛠️ LMS UW Assistant updated to v1.8',
     lines: [
       "What's new:",
-      '• Refreshed menu/panel layout to match native LMS style',
-      '• Added Military Income Alert (CRP report)'
+      '• Added ABA Number Matcher: "Check" button next to each ABA Number on the customer page',
+      '• Checks the ABA against the Google Sheet list in real time (✓ On the list / ✗ Not on the list)',
+      '• "i" button shows Remarks from the sheet for matched ABAs'
     ]
   };
 
@@ -4651,5 +4660,755 @@ if (lmsUwAssistantModuleEnabled('militaryIncomeAlert')) {
 
   } catch (error) {
     console.warn('[LMS UW Assistant] Military Income Alert failed to start:', error);
+  }
+}
+
+
+/* ============================================================
+   MODULE: ABA Number Matcher
+   Source: new — checks the bank routing number shown in LMS
+   against a Google Sheets file (fresh fetch on every click).
+   ============================================================ */
+if (lmsUwAssistantModuleEnabled('abaNumberMatcher')) {
+  try {
+
+(function () {
+  'use strict';
+
+  // Google Sheet with routing numbers (the tab from #gid=... is checked).
+  const SHEET_URL = 'https://docs.google.com/spreadsheets/d/1TyfqL6pOhHpkVkjzhiOTfFrPieshnB5h02mBzxBMmds/edit?gid=0#gid=0';
+
+  // Header text of the column(s) to search. If no header matches,
+  // every column is searched as a fallback.
+  const ROUTING_HEADER_RE = /aba|routing|rtn/i;
+
+  const STYLE_ID = 'uw-routing-sheet-checker-style';
+  const UI_ATTR = 'data-uw-routing-ui';
+  const TARGET_ATTR = 'data-uw-routing-target';
+
+  let inFlightSheet = null;
+
+  const LABEL_RE = /^(?:bank\s*)?(?:routing|aba|rtn)(?:\s*(?:number|num|no\.?|#))?\s*[:#]?$/i;
+  const INLINE_RE = /^(?:bank\s*)?(?:routing|aba|rtn)(?:\s*(?:number|num|no\.?|#))?\s*[:#]?\s*(\d{9})\b/i;
+
+  let scanTimer = null;
+
+  function clean(text) {
+    return String(text || '').replace(/\s+/g, ' ').trim();
+  }
+
+  // Only the customer application page (CustomerDetails.aspx).
+  function isLmsPage() {
+    return /\/plm\.net\/+customers\/CustomerDetails\.aspx/i.test(window.location.href);
+  }
+
+  function escapeHtml(str) {
+    return String(str).replace(/[&<>"']/g, ch => ({
+      '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+    }[ch]));
+  }
+
+  function injectStyles() {
+    if (document.getElementById(STYLE_ID)) return;
+
+    const style = document.createElement('style');
+    style.id = STYLE_ID;
+    style.textContent = `
+      .uw-routing-wrap {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        margin-left: 6px;
+        vertical-align: middle;
+        white-space: nowrap;
+      }
+
+      .uw-routing-btn {
+        display: inline-block;
+        padding: 0 5px;
+        border: 1px solid #0d6efd;
+        border-radius: 0;
+        background: #e7f1ff;
+        color: #084298 !important;
+        font-family: Arial, sans-serif;
+        font-size: 10px;
+        font-weight: 700;
+        line-height: 15px;
+        height: 17px;
+        box-sizing: border-box;
+        vertical-align: middle;
+        cursor: pointer;
+        white-space: nowrap;
+      }
+
+      .uw-routing-btn:hover { background: #d8eaff; }
+
+      .uw-routing-btn[aria-disabled="true"] {
+        opacity: 0.65;
+        cursor: default;
+        pointer-events: none;
+      }
+
+      .uw-routing-pill {
+        display: inline-block;
+        max-width: 420px;
+        overflow: hidden;
+        text-overflow: ellipsis;
+        padding: 0 6px;
+        height: 17px;
+        line-height: 15px;
+        box-sizing: border-box;
+        border: 1px solid #aaa;
+        background: #f5f5f5;
+        color: #111;
+        font-family: Arial, sans-serif;
+        font-size: 11px;
+        font-weight: 700;
+        white-space: nowrap;
+        vertical-align: middle;
+      }
+
+      .uw-routing-pill:empty { display: none; }
+      .uw-routing-found { border-color: #228822; background: #e8f5e8; color: #145c14; }
+      .uw-routing-missing { border-color: #cc3333; background: #fde7e7; color: #992424; }
+      .uw-routing-warn { border-color: #d49a00; background: #fff5d6; color: #7a5600; }
+      .uw-routing-info { border-color: #337ab7; background: #e8f2fb; color: #23527c; }
+
+      .uw-routing-more {
+        display: none;
+        width: 17px;
+        padding: 0;
+        border-color: #228822;
+        background: #e8f5e8;
+        color: #145c14 !important;
+        font-family: Georgia, serif;
+        font-style: italic;
+        text-align: center;
+      }
+
+      .uw-routing-more:hover { background: #d4edd4; }
+      .uw-routing-more.uw-visible { display: inline-block; }
+
+      .uw-routing-popover {
+        position: absolute;
+        z-index: 100000;
+        width: max-content;
+        max-width: 320px;
+        box-sizing: border-box;
+        padding: 5px 20px 5px 8px;
+        background: #fff;
+        border: 1px solid #228822;
+        border-left: 4px solid #228822;
+        box-shadow: 0 4px 14px rgba(0,0,0,0.2);
+        font-family: Arial, sans-serif;
+        font-size: 12px;
+        line-height: 1.35;
+        color: #222;
+        white-space: pre-wrap;
+        word-break: break-word;
+      }
+
+      .uw-routing-popover .uw-pop-item + .uw-pop-item {
+        margin-top: 4px;
+        padding-top: 4px;
+        border-top: 1px dashed #ccc;
+      }
+
+      .uw-routing-popover .uw-pop-empty { color: #777; font-style: italic; }
+
+      .uw-routing-popover .uw-pop-close {
+        position: absolute;
+        top: 2px;
+        right: 4px;
+        border: 0;
+        background: transparent;
+        font-size: 15px;
+        line-height: 1;
+        cursor: pointer;
+        color: #888;
+      }
+    `;
+
+    document.head.appendChild(style);
+  }
+
+  /* ---------- Sheet URL ---------- */
+
+  function buildCsvUrl(sheetUrl) {
+    const raw = String(sheetUrl || '').trim();
+    if (!raw) return '';
+
+    let url;
+    try {
+      url = new URL(raw);
+    } catch (_) {
+      // Allow pasting just the spreadsheet ID.
+      if (/^[a-zA-Z0-9-_]{25,}$/.test(raw)) {
+        return `https://docs.google.com/spreadsheets/d/${raw}/export?format=csv`;
+      }
+      return '';
+    }
+
+    // "Publish to web" links already return CSV/HTML directly.
+    if (/\/spreadsheets\/d\/e\//.test(url.pathname)) {
+      if (!url.searchParams.get('output')) url.searchParams.set('output', 'csv');
+      return url.toString();
+    }
+
+    const idMatch = url.pathname.match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)/);
+    if (!idMatch) return '';
+
+    const gidMatch =
+      (url.hash || '').match(/gid=(\d+)/) ||
+      (url.search || '').match(/[?&]gid=(\d+)/);
+
+    let csvUrl = `https://docs.google.com/spreadsheets/d/${idMatch[1]}/export?format=csv`;
+    if (gidMatch) csvUrl += `&gid=${gidMatch[1]}`;
+
+    return csvUrl;
+  }
+
+  /* ---------- Fetch + parse ---------- */
+
+  function gmRequest(options) {
+    return new Promise((resolve, reject) => {
+      GM_xmlhttpRequest({
+        ...options,
+        timeout: options.timeout || 20000,
+        anonymous: false, // send the user's Google cookies, so private sheets work
+        onload: resolve,
+        onerror: () => reject(new Error('Network error while loading Google Sheet.')),
+        ontimeout: () => reject(new Error('Google Sheet request timed out.'))
+      });
+    });
+  }
+
+  function parseCsv(text) {
+    const rows = [];
+    let row = [];
+    let field = '';
+    let inQuotes = false;
+    const src = String(text || '');
+
+    for (let i = 0; i < src.length; i++) {
+      const ch = src[i];
+
+      if (inQuotes) {
+        if (ch === '"') {
+          if (src[i + 1] === '"') {
+            field += '"';
+            i++;
+          } else {
+            inQuotes = false;
+          }
+        } else {
+          field += ch;
+        }
+        continue;
+      }
+
+      if (ch === '"') {
+        inQuotes = true;
+      } else if (ch === ',') {
+        row.push(field);
+        field = '';
+      } else if (ch === '\n' || ch === '\r') {
+        if (ch === '\r' && src[i + 1] === '\n') i++;
+        row.push(field);
+        rows.push(row);
+        row = [];
+        field = '';
+      } else {
+        field += ch;
+      }
+    }
+
+    if (field !== '' || row.length) {
+      row.push(field);
+      rows.push(row);
+    }
+
+    return rows;
+  }
+
+  // Like clean(), but keeps the line breaks typed in the sheet cell
+  // (Alt+Enter / Ctrl+Enter), so Remarks keep their layout.
+  function keepLines(text) {
+    return String(text || '')
+      .replace(/\r\n?/g, '\n')
+      .split('\n')
+      .map(line => line.replace(/[ \t\u00a0]+/g, ' ').trim())
+      .join('\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim();
+  }
+
+  function cellHasRouting(cell, routing) {
+    const tokens = String(cell || '').match(/\d+/g) || [];
+    // Sheets often drop the leading zero (021000021 -> 21000021), so pad back to 9.
+    return tokens.some(t => t.length >= 7 && t.length <= 9 && t.padStart(9, '0') === routing);
+  }
+
+  // Several "Check Routing" clicks at the same moment share one download;
+  // every new click after that downloads the sheet again (real time).
+  function loadSheetRows() {
+    if (!inFlightSheet) {
+      inFlightSheet = fetchSheetRows().finally(() => {
+        inFlightSheet = null;
+      });
+    }
+    return inFlightSheet;
+  }
+
+  function sleep(ms) {
+    return new Promise(resolve => setTimeout(resolve, ms));
+  }
+
+  // gviz endpoint is served straight from docs.google.com (no redirect to
+  // googleusercontent.com), used as a fallback when /export misbehaves.
+  function buildGvizUrl(csvUrl) {
+    const m = String(csvUrl).match(/\/spreadsheets\/d\/([a-zA-Z0-9-_]+)\/export\?format=csv(?:&gid=(\d+))?/);
+    if (!m) return '';
+    let url = `https://docs.google.com/spreadsheets/d/${m[1]}/gviz/tq?tqx=out:csv`;
+    if (m[2]) url += `&gid=${m[2]}`;
+    return url;
+  }
+
+  async function tryFetchCsv(url) {
+    // Cache-buster: always read the current version of the file (real time).
+    const sep = url.includes('?') ? '&' : '?';
+
+    let response;
+    try {
+      response = await gmRequest({
+        method: 'GET',
+        url: `${url}${sep}_uwts=${Date.now()}`,
+        headers: { 'Accept': 'text/csv,text/plain,*/*' },
+        nocache: true
+      });
+    } catch (error) {
+      return { ok: false, reason: error?.message || String(error) };
+    }
+
+    const body = String(response.responseText || '');
+    const finalUrl = response.finalUrl || '';
+    const status = response.status;
+
+    const isLogin = /accounts\.google\.com|ServiceLogin/i.test(finalUrl);
+    const isHtml = /^\s*</.test(body);
+
+    if (status >= 200 && status < 300 && !isLogin && !isHtml && body.trim()) {
+      return { ok: true, rows: parseCsv(body) };
+    }
+
+    return {
+      ok: false,
+      isLogin,
+      reason: `HTTP ${status}${isLogin ? ' (login page)' : isHtml ? ' (HTML instead of CSV)' : ''} ${finalUrl}`.trim()
+    };
+  }
+
+  async function fetchSheetRows() {
+    const csvUrl = buildCsvUrl(SHEET_URL);
+    if (!csvUrl) {
+      return { error: 'Bad sheet link in script', className: 'uw-routing-warn' };
+    }
+
+    const gvizUrl = buildGvizUrl(csvUrl);
+
+    // Google sometimes answers one request with a login/redirect page even
+    // when the session is fine, so retry a few times before giving up.
+    const attempts = [
+      { url: csvUrl, wait: 0 },
+      { url: csvUrl, wait: 400 },
+      gvizUrl ? { url: gvizUrl, wait: 300 } : null,
+      { url: csvUrl, wait: 1200 }
+    ].filter(Boolean);
+
+    const reasons = [];
+    let sawLogin = false;
+
+    for (const attempt of attempts) {
+      if (attempt.wait) await sleep(attempt.wait);
+
+      const result = await tryFetchCsv(attempt.url);
+      if (result.ok) return { rows: result.rows };
+
+      if (result.isLogin) sawLogin = true;
+      reasons.push(result.reason);
+      console.warn('[ABA Number Matcher] attempt failed:', result.reason);
+    }
+
+    return {
+      error: sawLogin ? 'No access — log in to Google' : 'Sheet error, try again',
+      className: 'uw-routing-warn',
+      title: reasons.join('\n'),
+      openUrl: sawLogin ? SHEET_URL : ''
+    };
+  }
+
+  async function checkRoutingInSheet(routing) {
+    const loaded = await loadSheetRows();
+    if (loaded.error) return loaded;
+
+    const rows = loaded.rows;
+
+    // Find the header row (first 10 rows) that has an ABA/Routing column.
+    let headerIndex = -1;
+    let columns = [];
+
+    for (let i = 0; i < Math.min(rows.length, 10); i++) {
+      const cols = [];
+      rows[i].forEach((cell, c) => {
+        if (ROUTING_HEADER_RE.test(clean(cell))) cols.push(c);
+      });
+      if (cols.length) {
+        headerIndex = i;
+        columns = cols;
+        break;
+      }
+    }
+
+    const header = headerIndex >= 0 ? rows[headerIndex] : (rows[0] || []);
+    const hits = [];
+
+    rows.forEach((row, index) => {
+      if (index <= headerIndex) return;
+
+      const cellsToCheck = columns.length ? columns.map(c => row[c]) : row;
+
+      if (cellsToCheck.some(cell => cellHasRouting(cell, routing))) {
+        hits.push({ rowNumber: index + 1, row });
+      }
+    });
+
+    const remarksIndex = header.findIndex(cell => /remark/i.test(clean(cell)));
+
+    hits.forEach(hit => {
+      hit.remarks = remarksIndex >= 0 ? keepLines(hit.row[remarksIndex]) : '';
+    });
+
+    return {
+      hits,
+      header,
+      hasRemarksColumn: remarksIndex >= 0,
+      totalRows: Math.max(0, rows.length - headerIndex - 1),
+      columnNames: columns.map(c => clean(header[c])).filter(Boolean)
+    };
+  }
+
+  /* ---------- Find routing number on the LMS page ---------- */
+
+  function extractRouting(el) {
+    if (!el) return '';
+
+    const input = el.matches?.('input, select, textarea')
+      ? el
+      : el.querySelector?.('input[type="text"], input:not([type]), select, textarea');
+
+    const text = input ? (input.value || '') : (el.textContent || '');
+    const match = clean(text).match(/\b(\d{9})\b/);
+
+    return match ? match[1] : '';
+  }
+
+  function findValueElement(labelEl) {
+    if (labelEl.nextElementSibling && !labelEl.nextElementSibling.hasAttribute(UI_ATTR)) {
+      return labelEl.nextElementSibling;
+    }
+
+    const cell = labelEl.closest('td, th');
+    if (cell && cell !== labelEl && cell.nextElementSibling) {
+      return cell.nextElementSibling;
+    }
+
+    return null;
+  }
+
+  // LMS markup:
+  // <td class="TitleBlack">ABA Number :</td><td class="ValueBlack">121000358</td>
+  // There can be several such rows (several bank accounts) — each gets a button.
+  function findLmsAbaTargets() {
+    const targets = [];
+
+    document.querySelectorAll('td.TitleBlack').forEach(labelCell => {
+      if (!/^ABA\s*Number\s*:?$/i.test(clean(labelCell.textContent))) return;
+
+      const valueCell = labelCell.nextElementSibling;
+      if (!valueCell || !/^td$/i.test(valueCell.tagName)) return;
+
+      const routing = extractRouting(valueCell);
+      if (routing) targets.push({ host: valueCell, routing });
+    });
+
+    return targets;
+  }
+
+  function findRoutingTargets() {
+    return findLmsAbaTargets();
+  }
+
+  // Generic label search — not used now (customer page has a fixed layout),
+  // kept in case LMS markup changes.
+  function findRoutingTargetsGeneric() {
+
+    // Generic fallback for other pages / layouts.
+    const targets = [];
+    const seen = new Set();
+    const candidates = document.querySelectorAll('td, th, span, label, b, strong, div');
+
+    for (const el of candidates) {
+      if (el.closest(`[${UI_ATTR}]`)) continue;
+
+      const text = clean(el.textContent);
+      if (!text || text.length > 60) continue;
+      if (!/routing|aba|rtn/i.test(text)) continue;
+
+      // Use only the deepest element that carries the label.
+      const childHasLabel = Array.from(el.children).some(child =>
+        !child.hasAttribute(UI_ATTR) && /routing|aba|rtn/i.test(child.textContent || '')
+      );
+      if (childHasLabel) continue;
+
+      let host = null;
+      let routing = '';
+
+      const inline = text.match(INLINE_RE);
+      if (inline) {
+        host = el;
+        routing = inline[1];
+      } else if (LABEL_RE.test(text)) {
+        host = findValueElement(el);
+        routing = extractRouting(host);
+      }
+
+      if (!host || !routing || seen.has(host)) continue;
+
+      seen.add(host);
+      targets.push({ host, routing });
+    }
+
+    return targets;
+  }
+
+  /* ---------- UI ---------- */
+
+  function setPill(pill, text, className, title = '') {
+    pill.className = `uw-routing-pill ${className || 'uw-routing-info'}`;
+    pill.textContent = text;
+    pill.title = title;
+  }
+
+  function describeRow(header, row) {
+    return row
+      .map((value, i) => {
+        const v = clean(value);
+        if (!v) return '';
+        const h = clean(header[i] || '');
+        return h ? `${h}: ${v}` : v;
+      })
+      .filter(Boolean)
+      .join('\n');
+  }
+
+  async function runCheck(wrap, routing) {
+    const button = wrap.querySelector('.uw-routing-check');
+    const pill = wrap.querySelector('.uw-routing-pill');
+
+    const more = wrap.querySelector('.uw-routing-more');
+
+    button.setAttribute('aria-disabled', 'true');
+    more.classList.remove('uw-visible');
+    wrap._uwRemarks = null;
+    closePopover();
+    setPill(pill, 'Checking...', 'uw-routing-info');
+
+    try {
+      const result = await checkRoutingInSheet(routing);
+
+      if (result.error) {
+        setPill(pill, result.error, result.className, result.title || '');
+        if (result.openUrl && window.confirm(`${result.error}.\nOpen the sheet in a new tab?`)) {
+          window.open(result.openUrl, '_blank');
+        }
+        return;
+      }
+
+      const checkedAt = `Checked at ${new Date().toLocaleTimeString()}`;
+      const where = result.columnNames.length
+        ? `column: ${result.columnNames.join(', ')}`
+        : 'all columns';
+
+      if (!result.hits.length) {
+        setPill(
+          pill,
+          '✗ Not on the list',
+          'uw-routing-missing',
+          `${routing} not found in ${result.totalRows} rows (${where}).\n${checkedAt}`
+        );
+        return;
+      }
+
+      setPill(
+        pill,
+        '✓ On the list',
+        'uw-routing-found',
+        result.hits
+          .map(hit => `Row ${hit.rowNumber}\n${describeRow(result.header, hit.row)}`)
+          .join('\n\n') + `\n\n${checkedAt}`
+      );
+
+      wrap._uwRemarks = {
+        hits: result.hits,
+        hasRemarksColumn: result.hasRemarksColumn,
+        header: result.header,
+        checkedAt
+      };
+      more.classList.add('uw-visible');
+    } catch (error) {
+      setPill(pill, 'Error', 'uw-routing-warn', error?.message || String(error));
+    } finally {
+      button.setAttribute('aria-disabled', 'false');
+    }
+  }
+
+  let openPopover = null;
+
+  function closePopover() {
+    if (openPopover) {
+      openPopover.el.remove();
+      openPopover = null;
+    }
+  }
+
+  function showRemarks(anchor, data) {
+    if (openPopover && openPopover.anchor === anchor) {
+      closePopover();
+      return;
+    }
+
+    closePopover();
+    if (!data) return;
+
+    const pop = document.createElement('div');
+    pop.className = 'uw-routing-popover';
+    pop.setAttribute(UI_ATTR, '1');
+
+    const items = data.hits.map(hit => {
+      let text;
+      if (data.hasRemarksColumn) {
+        text = hit.remarks
+          ? escapeHtml(hit.remarks)
+          : '<span class="uw-pop-empty">No remarks for this row.</span>';
+      } else {
+        text = escapeHtml(describeRow(data.header, hit.row));
+      }
+      const prefix = data.hits.length > 1 ? `<b>Row ${hit.rowNumber}:</b> ` : '';
+      return `<div class="uw-pop-item">${prefix}${text}</div>`;
+    }).join('');
+
+    pop.innerHTML = `<button type="button" class="uw-pop-close" aria-label="Close">&times;</button>${items}`;
+
+    document.body.appendChild(pop);
+
+    const rect = anchor.getBoundingClientRect();
+    const width = pop.offsetWidth;
+    const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8));
+
+    pop.style.left = `${left + window.scrollX}px`;
+    pop.style.top = `${rect.bottom + window.scrollY + 4}px`;
+
+    pop.querySelector('.uw-pop-close').addEventListener('click', closePopover);
+
+    openPopover = { el: pop, anchor };
+  }
+
+  document.addEventListener('mousedown', event => {
+    if (!openPopover) return;
+    if (openPopover.el.contains(event.target) || openPopover.anchor.contains(event.target)) return;
+    closePopover();
+  });
+
+  document.addEventListener('keydown', event => {
+    if (event.key === 'Escape') closePopover();
+  });
+
+  function addButton(target) {
+    const { host, routing } = target;
+    const existing = host.querySelector(`[${UI_ATTR}]`);
+
+    if (existing) {
+      if (existing.getAttribute(TARGET_ATTR) === routing) return;
+      existing.remove(); // routing changed (e.g. bank account edited) — rebuild
+    }
+
+    const wrap = document.createElement('span');
+    wrap.className = 'uw-routing-wrap';
+    wrap.setAttribute(UI_ATTR, '1');
+    wrap.setAttribute(TARGET_ATTR, routing);
+
+    wrap.innerHTML = `
+      <button type="button" class="uw-routing-btn uw-routing-check" title="Check ${escapeHtml(routing)} in the Google Sheet">Check</button>
+      <span class="uw-routing-pill"></span>
+      <button type="button" class="uw-routing-btn uw-routing-more" title="Show Remarks from the sheet">i</button>
+    `;
+
+    host.appendChild(wrap);
+
+    wrap.querySelector('.uw-routing-check').addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      runCheck(wrap, routing);
+    });
+
+    const moreBtn = wrap.querySelector('.uw-routing-more');
+    moreBtn.addEventListener('click', event => {
+      event.preventDefault();
+      event.stopPropagation();
+      showRemarks(moreBtn, wrap._uwRemarks);
+    });
+  }
+
+  function scan() {
+    if (!isLmsPage()) return;
+
+    const targets = findRoutingTargets();
+    if (!targets.length) return;
+
+    injectStyles();
+    targets.forEach(addButton);
+  }
+
+  function scheduleScan() {
+    if (scanTimer) clearTimeout(scanTimer);
+    scanTimer = setTimeout(() => {
+      scanTimer = null;
+      scan();
+    }, 300);
+  }
+
+  function boot() {
+    if (!isLmsPage()) return;
+
+    scan();
+    setTimeout(scan, 800);
+    setTimeout(scan, 2000);
+
+    const observer = new MutationObserver(scheduleScan);
+    observer.observe(document.documentElement || document.body, {
+      childList: true,
+      subtree: true
+    });
+  }
+
+  if (document.readyState === 'loading') {
+    document.addEventListener('DOMContentLoaded', boot);
+  } else {
+    boot();
+  }
+})();
+
+  } catch (error) {
+    console.warn('[LMS UW Assistant] ABA Number Matcher failed to start:', error);
   }
 }
